@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{if .AppName}}{{.AppName}}{{else}}የጨራ ገበያ{{end}} - የመለያ ማዘጋጃ</title>
+</head>
+
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f6f8; -webkit-font-smoothing: antialiased;">
+  <div style="max-width: 580px; margin: 30px auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08); border: 1px solid #e5e7eb;">
+
+    <!-- Branded Header -->
+    <div style="background-color: #32a7fa; padding: 28px 20px; text-align: center; border-bottom: 4px solid #FFF307;">
+      <h1 style="color: #FFF307; margin: 0; font-size: 26px; font-weight: 800; letter-spacing: 1px;">{{if .AppName}}{{.AppName}}{{else}}የጨራ ገበያ{{end}}</h1>
+      <p style="color: #ffffff; margin: 6px 0 0 0; font-size: 14px; font-weight: 500; opacity: 0.9;">
+        እንኳን ደህና መጡ! 🎉
+      </p>
+    </div>
+
+    <!-- Content -->
+    <div style="padding: 36px 30px; color: #1f2937;">
+      <p style="font-size: 16px; color: #32a7fa; font-weight: 600; margin-top: 0;">
+        ሰላም <strong>{{if .Name}}{{.Name}}{{else}}ተጠቃሚ{{end}}</strong>፣
+      </p>
+
+      <p style="font-size: 15px; color: #4b5563; line-height: 1.6;">
+        ወደ <strong>{{if .AppName}}{{.AppName}}{{else}}የጨራ ገበያ{{end}}</strong> አስተዳደር ፕላትፎርም እንኳን ደህና መጡ! መለያዎ በተሳካ ሁኔታ ተፈጥሯል።
+      </p>
+
+      <p style="font-size: 15px; color: #4b5563; line-height: 1.6;">
+        እባክዎ መለያዎን ለማንቃትና የይለፍ ቃልዎን ለማዘጋጀት ከታች ያለውን አዝራር ይጫኑ፡
+      </p>
+
+      <!-- CTA Button -->
+      <div style="margin: 30px 0; text-align: center;">
+        <a href="{{.Link}}" target="_blank" style="
+          display: inline-block;
+          background-color: #32a7fa;
+          color: #FFF307;
+          padding: 14px 34px;
+          text-decoration: none;
+          border-radius: 8px;
+          font-weight: 700;
+          font-size: 15px;
+          box-shadow: 0 2px 8px rgba(50, 167, 250, 0.25);
+        ">
+          የይለፍ ቃል አዘጋጅ
+        </a>
+      </div>
+
+      <div style="background-color: #f1f5f9; border-left: 4px solid #32a7fa; padding: 12px 14px; border-radius: 0 6px 6px 0;">
+        <p style="font-size: 12px; color: #475569; margin: 0;">
+          • ለደህንነት ሲባል ይህ ሊንክ ሊያልቅበት ስለሚችል ካለቀበት እንደገና እንዲላክሎት መጠየቅ ይችላሉ።
+        </p>
+      </div>
+    </div>
+
+    <!-- Branded Footer -->
+    <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center;">
+      <p style="font-size: 12px; color: #64748b; margin: 0 0 6px 0;">
+        ይህ በራስ-ሰር የተላከ የደህንነት መልእክት ነው። እባክዎ ምላሽ አይስጡ።
+      </p>
+      <p style="font-size: 12px; color: #94a3b8; margin: 0; font-weight: 600;">
+        &copy; 2026 የጨራ ገበያ (Carra Market):: መብቱ በሕግ የተጠበቀ ነው::
+      </p>
+    </div>
+
+  </div>
+</body>
+
+</html>

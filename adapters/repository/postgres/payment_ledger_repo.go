@@ -1,0 +1,265 @@
+package postgres
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/bid-hub/admin-backend/core/domain"
+	"github.com/bid-hub/admin-backend/core/ports"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+type PaymentLedgerRepo struct {
+	db *gorm.DB
+}
+
+func NewPaymentLedgerRepository(db *gorm.DB) *PaymentLedgerRepo {
+	return &PaymentLedgerRepo{db: db}
+}
+
+const safePaymentSelect = `id, tx_ref, chapa_reference, user_id, product_id, participation_id,
+	amount, status, processed, retry_disabled, referred_by, last_error, created_at, updated_at`
+
+const paymentStaffEnrichSelect = safePaymentSelect + `,
+	participant_users.full_name AS participant_name,
+	participant_users.email AS participant_email,
+	lub_products.name AS product_name,
+	EXISTS (
+		SELECT 1 FROM lub_participations lp WHERE lp.transaction_id = payments.tx_ref
+	) AS has_participation,
+	COALESCE((
+		SELECT rr.status FROM refund_records rr
+		WHERE rr.tx_ref = payments.tx_ref
+		ORDER BY rr.created_at DESC
+		LIMIT 1
+	), '') AS refund_status`
+
+var paymentListSession = &gorm.Session{PrepareStmt: false}
+
+func (r *PaymentLedgerRepo) Upsert(ctx context.Context, p *domain.Payment) error {
+	db := r.db.WithContext(ctx)
+	var existing domain.Payment
+	err := db.Select(safePaymentSelect).Where("tx_ref = ?", p.TxRef).First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if p.ID == uuid.Nil {
+			p.ID = uuid.New()
+		}
+		now := time.Now()
+		if p.CreatedAt.IsZero() {
+			p.CreatedAt = now
+		}
+		p.UpdatedAt = now
+		return db.Create(p).Error
+	}
+	if err != nil {
+		return err
+	}
+	p.ID = existing.ID
+	p.CreatedAt = existing.CreatedAt
+
+	updates := map[string]interface{}{
+		"chapa_reference":  p.ChapaReference,
+		"user_id":          p.UserID,
+		"product_id":       p.ProductID,
+		"participation_id": p.ParticipationID,
+		"amount":           p.Amount,
+		"status":           p.Status,
+		"processed":        p.Processed,
+		"retry_disabled":   p.RetryDisabled,
+		"referred_by":      p.ReferredBy,
+		"last_error":       p.LastError,
+		"updated_at":       time.Now(),
+	}
+	return db.Model(&domain.Payment{}).Where("tx_ref = ?", p.TxRef).Updates(updates).Error
+}
+
+func (r *PaymentLedgerRepo) GetByTxRef(ctx context.Context, txRef string) (*domain.Payment, error) {
+	var row domain.Payment
+	if err := r.db.WithContext(ctx).Select(safePaymentSelect).Where("tx_ref = ?", txRef).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func applyPaymentStaffFilters(q *gorm.DB, f ports.PaymentListFilter) *gorm.DB {
+	if s := strings.TrimSpace(f.Status); s != "" && s != "all" {
+		q = q.Where("payments.status = ?", s)
+	}
+	switch strings.TrimSpace(f.Processed) {
+	case "true":
+		q = q.Where("payments.processed = ?", true)
+	case "false":
+		q = q.Where("payments.processed = ?", false)
+	}
+	switch strings.TrimSpace(f.RetryDisabled) {
+	case "true":
+		q = q.Where("payments.retry_disabled = ?", true)
+	case "false":
+		q = q.Where("payments.retry_disabled = ?", false)
+	}
+	return q
+}
+
+func (r *PaymentLedgerRepo) ListStaff(ctx context.Context, f ports.PaymentListFilter) ([]domain.PaymentStaffView, int64, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	type staffRow struct {
+		domain.Payment
+		ParticipantName  string `gorm:"column:participant_name"`
+		ParticipantEmail string `gorm:"column:participant_email"`
+		ProductName      string `gorm:"column:product_name"`
+		HasParticipation bool   `gorm:"column:has_participation"`
+		RefundStatus     string `gorm:"column:refund_status"`
+	}
+
+	search := strings.TrimSpace(f.Search)
+
+	countQ := applyPaymentStaffFilters(
+		r.db.WithContext(ctx).Session(paymentListSession).Table("payments"),
+		f,
+	)
+	if search != "" {
+		term := "%" + search + "%"
+		countQ = countQ.
+			Joins("LEFT JOIN participant_users ON participant_users.id = payments.user_id").
+			Joins("LEFT JOIN lub_products ON lub_products.id = payments.product_id").
+			Where(
+				"payments.tx_ref ILIKE ? OR participant_users.email ILIKE ? OR participant_users.full_name ILIKE ? OR lub_products.name ILIKE ?",
+				term, term, term, term,
+			).
+			Distinct("payments.id")
+	}
+
+	var total int64
+	if err := countQ.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	listQ := applyPaymentStaffFilters(
+		r.db.WithContext(ctx).Session(paymentListSession).Table("payments").
+			Select(paymentStaffEnrichSelect).
+			Joins("LEFT JOIN participant_users ON participant_users.id = payments.user_id").
+			Joins("LEFT JOIN lub_products ON lub_products.id = payments.product_id"),
+		f,
+	)
+	if search != "" {
+		term := "%" + search + "%"
+		listQ = listQ.Where(
+			"payments.tx_ref ILIKE ? OR participant_users.email ILIKE ? OR participant_users.full_name ILIKE ? OR lub_products.name ILIKE ?",
+			term, term, term, term,
+		)
+	}
+
+	var rows []staffRow
+	err := listQ.Order("payments.updated_at DESC").Limit(limit).Offset(offset).Scan(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]domain.PaymentStaffView, len(rows))
+	for i := range rows {
+		out[i] = domain.PaymentStaffView{
+			Payment:          rows[i].Payment,
+			ParticipantName:  rows[i].ParticipantName,
+			ParticipantEmail: rows[i].ParticipantEmail,
+			ProductName:      rows[i].ProductName,
+			HasParticipation: rows[i].HasParticipation,
+			RefundStatus:     rows[i].RefundStatus,
+		}
+	}
+	return out, total, nil
+}
+
+func (r *PaymentLedgerRepo) ListSuccessUnprocessed(ctx context.Context, limit int) ([]domain.Payment, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	var rows []domain.Payment
+	err := r.db.WithContext(ctx).
+		Select(safePaymentSelect).
+		Where("status = ? AND processed = ? AND retry_disabled = ?",
+			domain.PaymentStatusSuccess, false, false).
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
+}
+
+func (r *PaymentLedgerRepo) MarkProcessed(ctx context.Context, txRef string) error {
+	return r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Where("tx_ref = ?", txRef).
+		Updates(map[string]interface{}{
+			"processed":  true,
+			"last_error": "",
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *PaymentLedgerRepo) SetChapaReference(ctx context.Context, txRef string, chapaReference string) error {
+	chapaReference = strings.TrimSpace(chapaReference)
+	if chapaReference == "" {
+		return nil
+	}
+	return r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Where("tx_ref = ?", txRef).
+		Updates(map[string]interface{}{
+			"chapa_reference": chapaReference,
+			"updated_at":      time.Now(),
+		}).Error
+}
+
+func (r *PaymentLedgerRepo) MarkRefunded(ctx context.Context, txRef string) error {
+	return r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Where("tx_ref = ?", txRef).
+		Updates(map[string]interface{}{
+			"status":         domain.PaymentStatusRefunded,
+			"processed":      true,
+			"retry_disabled": true,
+			"last_error":     "",
+			"updated_at":     time.Now(),
+		}).Error
+}
+
+func (r *PaymentLedgerRepo) SetLastError(ctx context.Context, txRef string, msg string) error {
+	return r.setLastError(ctx, txRef, msg, nil)
+}
+
+func (r *PaymentLedgerRepo) SetFulfillmentFailure(ctx context.Context, txRef string, err error) error {
+	msg := domain.FormatErrorDetail(err)
+	retryDisabled := !domain.IsRetryableFulfillmentError(err)
+	return r.setLastError(ctx, txRef, msg, &retryDisabled)
+}
+
+func (r *PaymentLedgerRepo) setLastError(ctx context.Context, txRef string, msg string, retryDisabled *bool) error {
+	if len(msg) > domain.MaxPaymentLedgerErrorLen {
+		msg = msg[:domain.MaxPaymentLedgerErrorLen]
+	}
+	updates := map[string]interface{}{
+		"last_error": msg,
+		"updated_at": time.Now(),
+	}
+	if retryDisabled != nil {
+		updates["retry_disabled"] = *retryDisabled
+	}
+	return r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Where("tx_ref = ?", txRef).
+		Updates(updates).Error
+}
