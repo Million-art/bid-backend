@@ -18,7 +18,7 @@ type Payment struct {
 	AuctionID       *uuid.UUID `gorm:"type:uuid;index:idx_payments_auction"                                                    json:"auctionId,omitempty"`
 	ParticipationID *uuid.UUID `gorm:"type:uuid;index:idx_payments_participation"                                              json:"participationId,omitempty"`
 	Amount          Money      `gorm:"type:decimal(12,2);not null"                                                             json:"amount"`
-	Status          string     `gorm:"type:varchar(20);not null;default:'pending';index:idx_payments_unprocessed,priority:1"   json:"status"`
+	Status          string     `gorm:"type:payment_status;not null;default:'pending';index:idx_payments_unprocessed,priority:1" json:"status"`
 	Processed       bool       `gorm:"not null;default:false;index:idx_payments_unprocessed,priority:2"                        json:"processed"`
 	RetryDisabled   bool       `gorm:"not null;default:false;index:idx_payments_unprocessed,priority:3"                        json:"retryDisabled"`
 	LastError       string     `gorm:"type:text"                                                                               json:"lastError,omitempty"`
@@ -72,7 +72,7 @@ type RefundRecord struct {
 	Amount          Money      `gorm:"type:decimal(12,2);not null"                    json:"amount"`
 	TxRef           string     `gorm:"type:varchar(255);not null;index:idx_refunds_tx_ref" json:"txRef"`
 	ChapaRefundRef  string     `gorm:"type:varchar(255)"                              json:"chapaRefundRef,omitempty"`
-	Status          string     `gorm:"type:varchar(20);not null;default:'pending';index:idx_refunds_status" json:"status"`
+	Status          string     `gorm:"type:refund_status;not null;default:'pending';index:idx_refunds_status" json:"status"`
 	ErrorMessage    string     `gorm:"type:text"                                      json:"errorMessage,omitempty"`
 	ProcessedBy     *uuid.UUID `gorm:"type:uuid;index:idx_refunds_processed_by"       json:"processedBy,omitempty"`
 	CreatedAt       time.Time  `json:"createdAt"`

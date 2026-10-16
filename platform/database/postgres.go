@@ -16,6 +16,85 @@ func Migrate(db *gorm.DB) {
 	if db == nil {
 		return
 	}
+
+	enumMigrations := []string{
+		// 1. Create PostgreSQL ENUM types idempotently
+		`DO $$ BEGIN
+			CREATE TYPE auction_status AS ENUM ('draft', 'active', 'postponed', 'closed', 'executed', 'cancelled');
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			CREATE TYPE user_status AS ENUM ('active', 'suspended', 'pending');
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			CREATE TYPE payment_status AS ENUM ('pending', 'success', 'failed', 'refunded');
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'success', 'failed', 'reversed');
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			CREATE TYPE participant_user_status AS ENUM ('active', 'suspended');
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			CREATE TYPE participation_status AS ENUM ('active', 'refunded');
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// 2. Convert existing varchar status columns to their ENUM types (if tables already exist)
+		`DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'auctions' AND column_name = 'status' AND udt_name <> 'auction_status') THEN
+				ALTER TABLE auctions DROP CONSTRAINT IF EXISTS chk_auctions_status;
+				ALTER TABLE auctions ALTER COLUMN status DROP DEFAULT;
+				ALTER TABLE auctions ALTER COLUMN status TYPE auction_status USING status::text::auction_status;
+				ALTER TABLE auctions ALTER COLUMN status SET DEFAULT 'draft'::auction_status;
+			END IF;
+		END $$;`,
+		`DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'status' AND udt_name <> 'user_status') THEN
+				ALTER TABLE users DROP CONSTRAINT IF EXISTS chk_users_status;
+				ALTER TABLE users ALTER COLUMN status DROP DEFAULT;
+				ALTER TABLE users ALTER COLUMN status TYPE user_status USING status::text::user_status;
+				ALTER TABLE users ALTER COLUMN status SET DEFAULT 'active'::user_status;
+			END IF;
+		END $$;`,
+		`DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'payments' AND column_name = 'status' AND udt_name <> 'payment_status') THEN
+				ALTER TABLE payments DROP CONSTRAINT IF EXISTS chk_payments_status;
+				ALTER TABLE payments ALTER COLUMN status DROP DEFAULT;
+				ALTER TABLE payments ALTER COLUMN status TYPE payment_status USING status::text::payment_status;
+				ALTER TABLE payments ALTER COLUMN status SET DEFAULT 'pending'::payment_status;
+			END IF;
+		END $$;`,
+		`DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'refund_records' AND column_name = 'status' AND udt_name <> 'refund_status') THEN
+				ALTER TABLE refund_records DROP CONSTRAINT IF EXISTS chk_refunds_status;
+				ALTER TABLE refund_records ALTER COLUMN status DROP DEFAULT;
+				ALTER TABLE refund_records ALTER COLUMN status TYPE refund_status USING status::text::refund_status;
+				ALTER TABLE refund_records ALTER COLUMN status SET DEFAULT 'pending'::refund_status;
+			END IF;
+		END $$;`,
+		`DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'participant_users' AND column_name = 'status' AND udt_name <> 'participant_user_status') THEN
+				ALTER TABLE participant_users DROP CONSTRAINT IF EXISTS chk_participant_users_status;
+				ALTER TABLE participant_users ALTER COLUMN status DROP DEFAULT;
+				ALTER TABLE participant_users ALTER COLUMN status TYPE participant_user_status USING status::text::participant_user_status;
+				ALTER TABLE participant_users ALTER COLUMN status SET DEFAULT 'active'::participant_user_status;
+			END IF;
+		END $$;`,
+		`DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'auction_participations' AND column_name = 'status' AND udt_name <> 'participation_status') THEN
+				ALTER TABLE auction_participations DROP CONSTRAINT IF EXISTS chk_participations_status;
+				ALTER TABLE auction_participations ALTER COLUMN status DROP DEFAULT;
+				ALTER TABLE auction_participations ALTER COLUMN status TYPE participation_status USING status::text::participation_status;
+				ALTER TABLE auction_participations ALTER COLUMN status SET DEFAULT 'active'::participation_status;
+			END IF;
+		END $$;`,
+	}
+
+	for _, stmt := range enumMigrations {
+		if err := db.Exec(stmt).Error; err != nil {
+			slog.Warn("database: enum migration warning", "error", err)
+		}
+	}
+
 	if err := db.AutoMigrate(
 		&domain.User{},
 		&domain.ParticipantUser{},
@@ -42,16 +121,10 @@ func Migrate(db *gorm.DB) {
 		`DO $$ BEGIN
 			ALTER TABLE auctions ADD CONSTRAINT chk_auctions_max_bid_value CHECK (max_bid_value IS NULL OR max_bid_value >= min_bid_value);
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-		`DO $$ BEGIN
-			ALTER TABLE auctions ADD CONSTRAINT chk_auctions_status CHECK (status IN ('draft','active','postponed','closed','executed','cancelled'));
-		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 
 		// Auction participations constraints
 		`DO $$ BEGIN
 			ALTER TABLE auction_participations ADD CONSTRAINT chk_participations_fee_paid CHECK (fee_paid > 0);
-		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-		`DO $$ BEGIN
-			ALTER TABLE auction_participations ADD CONSTRAINT chk_participations_status CHECK (status IN ('active','refunded'));
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 		`DO $$ BEGIN
 			ALTER TABLE auction_participations ADD CONSTRAINT fk_participations_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE CASCADE;
@@ -75,9 +148,6 @@ func Migrate(db *gorm.DB) {
 			ALTER TABLE payments ADD CONSTRAINT chk_payments_amount CHECK (amount >= 0);
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 		`DO $$ BEGIN
-			ALTER TABLE payments ADD CONSTRAINT chk_payments_status CHECK (status IN ('pending','success','failed','refunded'));
-		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-		`DO $$ BEGIN
 			ALTER TABLE payments ADD CONSTRAINT fk_payments_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE SET NULL;
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 		`DO $$ BEGIN
@@ -87,9 +157,6 @@ func Migrate(db *gorm.DB) {
 		// Refund records constraints
 		`DO $$ BEGIN
 			ALTER TABLE refund_records ADD CONSTRAINT chk_refunds_amount CHECK (amount > 0);
-		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-		`DO $$ BEGIN
-			ALTER TABLE refund_records ADD CONSTRAINT chk_refunds_status CHECK (status IN ('pending','processing','success','failed','reversed'));
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 		`DO $$ BEGIN
 			ALTER TABLE refund_records ADD CONSTRAINT fk_refunds_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE RESTRICT;

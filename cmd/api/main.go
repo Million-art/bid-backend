@@ -29,6 +29,8 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/helmet"
 	fiberlog "github.com/gofiber/fiber/v3/middleware/logger"
 	fiber_recover "github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -240,7 +242,7 @@ func main() {
 	}))
 	app.Use(helmet.New())
 
-	// 5. Initialize Background Worker and Routes
+		// 5. Initialize Background Worker and Routes
 	bgWorker := worker.NewBackgroundWorker()
 	err = handler.RegisterRoutes(app, db, redisClient, cfg)
 	if err != nil {
@@ -248,25 +250,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Health check & root — must be registered AFTER RegisterRoutes so they
-	// don't conflict with the /api group, but before app.Listen so the
-	// router can match them. These prevent Fiber's internal 501/404 error
-	// paths from triggering a nil panic in the middleware traversal.
-	app.Get("/", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok", "service": "carra-market-admin-backend"})
-	})
-	app.Get("/health", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok"})
-	})
-	app.Get("/api/health", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok"})
-	})
-	app.Get("/swagger", func(c fiber.Ctx) error {
-		return c.Type("html").SendString(`<!DOCTYPE html><html><head><link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script><script>window.onload=()=>SwaggerUIBundle({url:"/swagger.json",dom_id:"#swagger-ui"});</script></body></html>`)
-	})
-	app.Get("/swagger.json", func(c fiber.Ctx) error {
-		return c.SendFile("docs/swagger.json")
-	})
+	// 6. Seed admin user if not exists
+	seedAdmin := func() error {
+		// Check if admin user already exists
+		admin, err := postgres.NewUserRepository(db).GetByEmail(cfg.SeedAdminEmail)
+		if err == nil && admin != nil {
+			slog.Info("Admin user already exists, skipping seed")
+			return nil
+		}
+		// Create admin user
+		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.SeedAdminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("failed to hash admin password: %w", err)
+		}
+		user := &domain.User{
+			ID:       uuid.New(),
+			FullName: "System Admin",
+			Email:    cfg.SeedAdminEmail,
+			Password: string(hash),
+			Role:     domain.RoleSuperAdmin,
+			Status:   domain.StatusActive,
+		}
+		if err := postgres.NewUserRepository(db).Create(user); err != nil {
+			return fmt.Errorf("failed to seed admin user: %w", err)
+		}
+		slog.Info("Admin user seeded successfully", "email", cfg.SeedAdminEmail)
+		return nil
+	}
+	if err := seedAdmin(); err != nil {
+		slog.Error("Failed to seed admin user", "error", err)
+	}
 
 	// Catch-all: return a clean 404 JSON instead of Fiber's default 501.
 	app.Use(func(c fiber.Ctx) error {

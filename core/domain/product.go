@@ -28,7 +28,7 @@ type Auction struct {
 	Description string        `gorm:"type:text"                                      json:"description"`
 	ImageURL    string        `gorm:"type:text"                                      json:"imageUrl,omitempty"`
 	VideoURL    string        `gorm:"type:text"                                      json:"videoUrl,omitempty"`
-	Status      AuctionStatus `gorm:"type:varchar(20);not null;default:'draft';index:idx_auctions_status;index:idx_auctions_due_close,priority:1" json:"status"`
+	Status      AuctionStatus `gorm:"type:auction_status;not null;default:'draft';index:idx_auctions_status;index:idx_auctions_due_close,priority:1" json:"status"`
 
 	// Financials & Rules
 	EntranceFee Money  `gorm:"type:decimal(12,2);not null"              json:"entranceFee"`

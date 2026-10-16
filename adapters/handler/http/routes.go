@@ -107,11 +107,13 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	registerAuthRoutes(api, authHandler, limiterStorage)
 
 	optionalAuth := OptionalAuthMiddleware(authService, cfg.JWTAccessSecret, cacheRepo)
+	registerPublicAuctionRoutes(api, optionalAuth, auctionHandler)
+
 	protected := api.Group("/", AuthMiddlewareWithCache(authService, cfg.JWTAccessSecret, cacheRepo))
 
 	registerUserRoutes(protected, userHandler, participantHandler)
 	registerPaymentRoutes(protected, paymentHandler)
-	registerAuctionRoutes(api, protected, optionalAuth, auctionAdminHandler, auctionHandler, cfg)
+	registerAdminAuctionRoutes(protected, auctionAdminHandler)
 	registerMiscRoutes(protected, dashboardHandler, mediaPresignHandler, notificationHandler, legalDocHandler)
 
 	return nil
@@ -179,8 +181,7 @@ func registerMiscRoutes(protected fiber.Router, dashboardHandler *DashboardHandl
 	notifications.Delete("/:id", notificationHandler.DeleteNotification)
 }
 
-func registerAuctionRoutes(api fiber.Router, protected fiber.Router, optionalAuth fiber.Handler, adminHandler *AuctionAdminHandler, publicHandler *AuctionHandler, cfg *env.Config) {
-	// Public routes
+func registerPublicAuctionRoutes(api fiber.Router, optionalAuth fiber.Handler, publicHandler *AuctionHandler) {
 	api.Get("/public/auctions", publicHandler.ListPublicAuctions)
 	api.Get("/public/auctions/:id", publicHandler.GetPublicAuction)
 	api.Post("/public/auctions/:auctionId/participate", optionalAuth, publicHandler.RecordParticipation)
@@ -188,8 +189,9 @@ func registerAuctionRoutes(api fiber.Router, protected fiber.Router, optionalAut
 	api.Patch("/public/bids/:id", optionalAuth, publicHandler.UpdateBid)
 	api.Get("/public/auctions/:auctionId/my-bids", optionalAuth, publicHandler.GetMyBids)
 	api.Get("/public/auctions/:auctionId/my-participation", optionalAuth, publicHandler.GetMyParticipation)
+}
 
-	// Admin routes
+func registerAdminAuctionRoutes(protected fiber.Router, adminHandler *AuctionAdminHandler) {
 	protected.Get("/auctions", adminHandler.List)
 	auctions := protected.Group("/auctions")
 	auctions.Post("/", adminHandler.Create)

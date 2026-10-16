@@ -34,7 +34,7 @@ type User struct {
 	JoinedVia        string `gorm:"type:varchar(30);default:'web'"            json:"joinedVia"`
 
 	Role      UserRole       `gorm:"type:varchar(20);not null;index:idx_users_role_status,priority:1" json:"role"`
-	Status    UserStatus     `gorm:"type:varchar(20);default:'active';index:idx_users_role_status,priority:2" json:"status"`
+	Status    UserStatus     `gorm:"type:user_status;not null;default:'active';index:idx_users_role_status,priority:2" json:"status"`
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
