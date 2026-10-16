@@ -282,7 +282,7 @@ func (h *AuctionAdminHandler) ExecuteDraw(c fiber.Ctx) error {
 		return mapLUBError(c, err)
 	}
 	if !result.HasWinner {
-		return response.Success(c, fiber.StatusOK, "Draw executed: no unique bid found — all bid values were duplicated", result)
+		return response.Success(c, fiber.StatusOK, "Draw executed: no unique bid found   all bid values were duplicated", result)
 	}
 	return response.Success(c, fiber.StatusOK, "Draw executed successfully", result)
 }

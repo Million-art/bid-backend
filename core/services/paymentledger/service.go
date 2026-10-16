@@ -47,7 +47,7 @@ func (s *Service) Refund(ctx context.Context, txRef string, actorID uuid.UUID, r
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		reason = "Staff refund — participation fulfillment failed"
+		reason = "Staff refund   participation fulfillment failed"
 	}
 
 	p, err := s.ledger.GetByTxRef(ctx, txRef)

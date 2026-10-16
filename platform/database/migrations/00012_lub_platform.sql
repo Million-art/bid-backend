@@ -3,7 +3,7 @@
 -- All amounts are stored as DECIMAL(12,2) with exactly 2 decimal places.
 
 -- ============================================================
--- 1. lub_products — auction items
+-- 1. lub_products   auction items
 -- ============================================================
 CREATE TABLE IF NOT EXISTS lub_products (
     id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -55,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_lub_products_status   ON lub_products(status);
 CREATE INDEX IF NOT EXISTS idx_lub_products_close_at ON lub_products(close_at);
 
 -- ============================================================
--- 2. lub_participations — entrance fee payment records
+-- 2. lub_participations   entrance fee payment records
 -- One row per (product, participant).
 -- ============================================================
 CREATE TABLE IF NOT EXISTS lub_participations (
@@ -85,7 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_lub_participations_product     ON lub_participati
 CREATE INDEX IF NOT EXISTS idx_lub_participations_participant ON lub_participations(participant_id);
 
 -- ============================================================
--- 3. lub_bid_entries — the actual bid values placed
+-- 3. lub_bid_entries   the actual bid values placed
 -- A participant may have multiple rows per product (different values).
 -- UNIQUE constraint: (product_id, participant_id, bid_value).
 -- ============================================================

@@ -44,7 +44,7 @@ func main() {
 	slog.SetDefault(logger.New(cfg.LogLevel, cfg.LogFormat))
 
 	// 1b. Initialize Sentry for error tracking and structured logging.
-	// Tuned for the Sentry Free plan (5,000 errors/month) — only sends
+	// Tuned for the Sentry Free plan (5,000 errors/month)   only sends
 	// actionable errors so quota is not wasted on noise.
 	if cfg.SentryDSN != "" {
 		if err := sentry.Init(sentry.ClientOptions{
@@ -62,7 +62,7 @@ func main() {
 			},
 
 			BeforeSend: func(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
-				// Drop health-check noise — never a real error
+				// Drop health-check noise   never a real error
 				if event.Request != nil {
 					url := event.Request.URL
 					if url == "/health" || url == "/api/health" {
@@ -80,13 +80,13 @@ func main() {
 				return event
 			},
 		}); err != nil {
-			slog.Warn("Sentry initialization failed — continuing without error tracking", "error", err)
+			slog.Warn("Sentry initialization failed   continuing without error tracking", "error", err)
 		} else {
 			slog.Info("Sentry error tracking initialized", "environment", cfg.SentryEnvironment)
 			defer sentry.Flush(3 * time.Second)
 		}
 	} else {
-		slog.Warn("SENTRY_DSN not set — error tracking disabled")
+		slog.Warn("SENTRY_DSN not set   error tracking disabled")
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -242,7 +242,7 @@ func main() {
 	}))
 	app.Use(helmet.New())
 
-		// 5. Initialize Background Worker and Routes
+	// 5. Initialize Background Worker and Routes
 	bgWorker := worker.NewBackgroundWorker()
 	err = handler.RegisterRoutes(app, db, redisClient, cfg)
 	if err != nil {
