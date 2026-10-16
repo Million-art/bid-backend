@@ -1,0 +1,136 @@
+definitions:
+  http.ForgotPasswordRequest:
+    properties:
+      email:
+        type: string
+      identifier:
+        type: string
+    type: object
+  http.LoginRequest:
+    properties:
+      email:
+        type: string
+      loginIdentifier:
+        type: string
+      password:
+        minLength: 1
+        type: string
+    required:
+    - password
+    type: object
+  http.ResetPasswordOTPRequest:
+    properties:
+      identifier:
+        type: string
+      newPassword:
+        minLength: 8
+        type: string
+      otp:
+        maxLength: 6
+        minLength: 6
+        type: string
+    required:
+    - identifier
+    - newPassword
+    - otp
+    type: object
+  http.SetPasswordRequest:
+    properties:
+      password:
+        minLength: 4
+        type: string
+      token:
+        type: string
+    required:
+    - password
+    - token
+    type: object
+info:
+  contact: {}
+paths:
+  /api/auth/forgot-password:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Forgot
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/http.ForgotPasswordRequest'
+      produces:
+      - application/json
+      responses: {}
+      summary: Forgot password
+      tags:
+      - Auth
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Login
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/http.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Login
+      tags:
+      - Auth
+  /api/auth/logout:
+    post:
+      responses: {}
+      summary: Logout
+      tags:
+      - Auth
+  /api/auth/refresh:
+    post:
+      responses: {}
+      summary: Refresh token
+      tags:
+      - Auth
+  /api/auth/reset-password-otp:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: ResetOTP
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/http.ResetPasswordOTPRequest'
+      produces:
+      - application/json
+      responses: {}
+      summary: Reset password OTP
+      tags:
+      - Auth
+  /api/auth/set-password:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: SetPassword
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/http.SetPasswordRequest'
+      produces:
+      - application/json
+      responses: {}
+      summary: Set password
+      tags:
+      - Auth
+swagger: "2.0"

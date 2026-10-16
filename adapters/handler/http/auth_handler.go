@@ -39,6 +39,13 @@ type ResetPasswordOTPRequest struct {
 	NewPassword string `json:"newPassword" validate:"required,min=8"`
 }
 
+// @Summary Login
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body LoginRequest true "Login"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/auth/login [post]
 func (h *AuthHandler) Login(c fiber.Ctx) error {
 	var req LoginRequest
 	if err := validate.BindAndValidate(c, &req); err != nil {
@@ -79,6 +86,9 @@ func (h *AuthHandler) Login(c fiber.Ctx) error {
 	})
 }
 
+// @Summary Refresh token
+// @Tags Auth
+// @Router /api/auth/refresh [post]
 func (h *AuthHandler) Refresh(c fiber.Ctx) error {
 	refreshToken := c.Cookies("refresh_token")
 	if refreshToken == "" {
@@ -106,6 +116,9 @@ func (h *AuthHandler) Refresh(c fiber.Ctx) error {
 	})
 }
 
+// @Summary Logout
+// @Tags Auth
+// @Router /api/auth/logout [post]
 func (h *AuthHandler) Logout(c fiber.Ctx) error {
 	// Revoke both tokens server-side so they cannot be replayed even if an attacker
 	// captured them before the cookies were cleared.
@@ -127,6 +140,12 @@ func (h *AuthHandler) clearAuthCookies(c fiber.Ctx) {
 	}
 }
 
+// @Summary Forgot password
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body ForgotPasswordRequest true "Forgot"
+// @Router /api/auth/forgot-password [post]
 func (h *AuthHandler) ForgotPassword(c fiber.Ctx) error {
 	var req ForgotPasswordRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -156,6 +175,12 @@ type SetPasswordRequest struct {
 	Password string `json:"password" validate:"required,min=4"`
 }
 
+// @Summary Set password
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body SetPasswordRequest true "SetPassword"
+// @Router /api/auth/set-password [post]
 func (h *AuthHandler) SetPassword(c fiber.Ctx) error {
 	var req SetPasswordRequest
 	if err := validate.BindAndValidate(c, &req); err != nil {
@@ -181,6 +206,12 @@ func (h *AuthHandler) setAccessTokenCookie(c fiber.Ctx, token string) {
 	c.Cookie(SessionCookie("access_token", token, 24*time.Hour, h.config))
 }
 
+// @Summary Reset password OTP
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body ResetPasswordOTPRequest true "ResetOTP"
+// @Router /api/auth/reset-password-otp [post]
 // ResetPasswordOTP handles phone-based password reset by verifying an OTP then updating the password.
 func (h *AuthHandler) ResetPasswordOTP(c fiber.Ctx) error {
 	var req ResetPasswordOTPRequest

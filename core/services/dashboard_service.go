@@ -8,68 +8,68 @@ import (
 )
 
 type DashboardStats struct {
-	TotalProducts         int64            `json:"totalProducts"`
+	TotalAuctions         int64            `json:"totalAuctions"`
 	TotalParticipants     int64            `json:"totalParticipants"`
 	TotalRevenue          float64          `json:"totalRevenue"`
 	PendingRevenue        float64          `json:"pendingRevenue"`
 	StatusBreakdown       map[string]int64 `json:"statusBreakdown"`
-	PendingProductsCount  int64            `json:"pendingProductsCount"`
-	ActiveProductsCount   int64            `json:"activeProductsCount"`
-	ExecutedProductsCount int64            `json:"executedProductsCount"`
+	PendingAuctionsCount  int64            `json:"pendingAuctionsCount"`
+	ActiveAuctionsCount   int64            `json:"activeAuctionsCount"`
+	ExecutedAuctionsCount int64            `json:"executedAuctionsCount"`
 }
 
 type DashboardService struct {
 	userRepo            ports.UserRepository
-	productRepo         ports.LUBProductRepository
+	auctionRepo         ports.AuctionRepository
 	participantUserRepo ports.ParticipantUserRepository
 	auditRepo           ports.AuditLogRepository
 }
 
 func NewDashboardService(
 	u ports.UserRepository,
-	p ports.LUBProductRepository,
+	a ports.AuctionRepository,
 	pu ports.ParticipantUserRepository,
-	a ports.AuditLogRepository,
+	au ports.AuditLogRepository,
 ) *DashboardService {
 	return &DashboardService{
 		userRepo:            u,
-		productRepo:         p,
+		auctionRepo:         a,
 		participantUserRepo: pu,
-		auditRepo:           a,
+		auditRepo:           au,
 	}
 }
 
 func (s *DashboardService) GetStats() (*DashboardStats, error) {
-	var totalProducts int64
+	var totalAuctions int64
 	statusBreakdown := make(map[string]int64)
-	var pendingProductsCount, activeProductsCount, executedProductsCount int64
+	var pendingAuctionsCount, activeAuctionsCount, executedAuctionsCount int64
 
-	statuses := []domain.ProductStatus{
-		domain.ProductStatusDraft,
-		domain.ProductStatusActive,
-		domain.ProductStatusPostponed,
-		domain.ProductStatusClosed,
-		domain.ProductStatusExecuted,
-		domain.ProductStatusCancelled,
+	statuses := []domain.AuctionStatus{
+		domain.AuctionStatusDraft,
+		domain.AuctionStatusActive,
+		domain.AuctionStatusPostponed,
+		domain.AuctionStatusClosed,
+		domain.AuctionStatusExecuted,
+		domain.AuctionStatusCancelled,
 	}
 
-	if s.productRepo != nil {
-		_, total, err := s.productRepo.List("", "", 1, 0)
+	if s.auctionRepo != nil {
+		_, total, err := s.auctionRepo.List("", "", 1, 0)
 		if err != nil {
 			return nil, err
 		}
-		totalProducts = total
+		totalAuctions = total
 
 		for _, st := range statuses {
-			_, count, _ := s.productRepo.List(string(st), "", 1, 0)
+			_, count, _ := s.auctionRepo.List(string(st), "", 1, 0)
 			statusBreakdown[string(st)] = count
 			switch st {
-			case domain.ProductStatusDraft:
-				pendingProductsCount = count
-			case domain.ProductStatusActive, domain.ProductStatusPostponed:
-				activeProductsCount += count
-			case domain.ProductStatusExecuted:
-				executedProductsCount = count
+			case domain.AuctionStatusDraft:
+				pendingAuctionsCount = count
+			case domain.AuctionStatusActive, domain.AuctionStatusPostponed:
+				activeAuctionsCount += count
+			case domain.AuctionStatusExecuted:
+				executedAuctionsCount = count
 			}
 		}
 	}
@@ -84,14 +84,14 @@ func (s *DashboardService) GetStats() (*DashboardStats, error) {
 	}
 
 	return &DashboardStats{
-		TotalProducts:         totalProducts,
+		TotalAuctions:         totalAuctions,
 		TotalParticipants:     totalParticipants,
 		TotalRevenue:          0,
 		PendingRevenue:        0,
 		StatusBreakdown:       statusBreakdown,
-		PendingProductsCount:  pendingProductsCount,
-		ActiveProductsCount:   activeProductsCount,
-		ExecutedProductsCount: executedProductsCount,
+		PendingAuctionsCount:  pendingAuctionsCount,
+		ActiveAuctionsCount:   activeAuctionsCount,
+		ExecutedAuctionsCount: executedAuctionsCount,
 	}, nil
 }
 

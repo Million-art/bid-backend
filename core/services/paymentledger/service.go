@@ -13,11 +13,11 @@ import (
 )
 
 type Service struct {
-	ledger     ports.PaymentLedgerRepository
-	refunds    ports.RefundRecordRepository
-	chapa      ports.PaymentProvider
-	lubSvc     *lub.Service
-	audit      *services.AuditLogService
+	ledger  ports.PaymentLedgerRepository
+	refunds ports.RefundRecordRepository
+	chapa   ports.PaymentProvider
+	lubSvc  *lub.Service
+	audit   *services.AuditLogService
 }
 
 func NewService(
@@ -47,7 +47,7 @@ func (s *Service) Refund(ctx context.Context, txRef string, actorID uuid.UUID, r
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		reason = "Staff refund  participation fulfillment failed"
+		reason = "Staff refund — participation fulfillment failed"
 	}
 
 	p, err := s.ledger.GetByTxRef(ctx, txRef)
@@ -63,8 +63,8 @@ func (s *Service) Refund(ctx context.Context, txRef string, actorID uuid.UUID, r
 	if p.Status != domain.PaymentStatusSuccess && p.Status != domain.PaymentStatusFailed {
 		return domain.NewAppError(422, "only successful or failed Chapa payments can be refunded", nil)
 	}
-	if p.UserID == nil || p.ProductID == nil {
-		return domain.NewAppError(422, "payment row is missing user or product metadata", nil)
+	if p.UserID == nil || p.AuctionID == nil {
+		return domain.NewAppError(422, "payment row is missing user or auction metadata", nil)
 	}
 
 	snap, err := verifyChapaPayment(s.chapa, txRef)
@@ -82,24 +82,24 @@ func (s *Service) Refund(ctx context.Context, txRef string, actorID uuid.UUID, r
 		}
 	}
 
-	part, _ := s.lubSvc.GetParticipation(*p.ProductID, p.UserID.String())
-	if part != nil && part.Status == domain.LUBParticipationStatusActive {
+	part, _ := s.lubSvc.GetParticipation(*p.AuctionID, p.UserID.String())
+	if part != nil && part.Status == domain.ParticipationStatusActive {
 		return s.initiateParticipationRefund(ctx, p, part, actorID, reason, snap)
 	}
 
 	return s.refundPaymentOnly(ctx, p, actorID, reason, snap)
 }
 
-func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Payment, part *domain.LUBParticipation, actorID uuid.UUID, reason string, snap *ports.ChapaTransactionSnapshot) error {
+func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Payment, part *domain.AuctionParticipation, actorID uuid.UUID, reason string, snap *ports.ChapaTransactionSnapshot) error {
 	record := &domain.RefundRecord{
-		ID:            uuid.New(),
-		ProductID:     part.ProductID,
+		ID:              uuid.New(),
+		AuctionID:       part.AuctionID,
 		ParticipationID: &part.ID,
-		ParticipantID: part.ParticipantID,
-		Amount:        p.Amount,
-		TxRef:         p.TxRef,
-		Status:        domain.RefundStatusPending,
-		ProcessedBy:   &actorID,
+		ParticipantID:   part.ParticipantID,
+		Amount:          p.Amount,
+		TxRef:           p.TxRef,
+		Status:          domain.RefundStatusPending,
+		ProcessedBy:     &actorID,
 	}
 	if err := s.refunds.Create(record); err != nil {
 		return err
@@ -155,7 +155,7 @@ func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Pay
 			EntityID: p.TxRef,
 			Metadata: map[string]interface{}{
 				"tx_ref":           p.TxRef,
-				"product_id":       p.ProductID.String(),
+				"auction_id":       p.AuctionID.String(),
 				"participant_id":   p.UserID.String(),
 				"participation_id": part.ID.String(),
 				"amount":           p.Amount.String(),
@@ -172,7 +172,7 @@ func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Pay
 func (s *Service) refundPaymentOnly(ctx context.Context, p *domain.Payment, actorID uuid.UUID, reason string, snap *ports.ChapaTransactionSnapshot) error {
 	record := &domain.RefundRecord{
 		ID:            uuid.New(),
-		ProductID:     *p.ProductID,
+		AuctionID:     *p.AuctionID,
 		ParticipantID: p.UserID.String(),
 		Amount:        p.Amount,
 		TxRef:         p.TxRef,
@@ -229,10 +229,10 @@ func (s *Service) refundPaymentOnly(ctx context.Context, p *domain.Payment, acto
 			Entity:   "payment",
 			EntityID: p.TxRef,
 			Metadata: map[string]interface{}{
-				"tx_ref":         p.TxRef,
-				"product_id":     p.ProductID.String(),
-				"participant_id": p.UserID.String(),
-				"amount":         p.Amount.String(),
+				"tx_ref":           p.TxRef,
+				"auction_id":       p.AuctionID.String(),
+				"participant_id":   p.UserID.String(),
+				"amount":           p.Amount.String(),
 				"chapa_refund_ref": chapaRef,
 				"chapa_status":     chapaStatus,
 				"refund_record_id": record.ID.String(),

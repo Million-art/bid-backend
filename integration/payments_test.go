@@ -35,7 +35,7 @@ func stack(t *testing.T) *testutil.Stack {
 	return testutil.NewStack(t, pg)
 }
 
-func chapaSnap(txRef string, productID, userID uuid.UUID, amount string) *chapapayment.VerifiedSnapshot {
+func chapaSnap(txRef string, auctionID, userID uuid.UUID, amount string) *chapapayment.VerifiedSnapshot {
 	return &chapapayment.VerifiedSnapshot{
 		TxRef:         txRef,
 		APIStatus:     "success",
@@ -44,7 +44,7 @@ func chapaSnap(txRef string, productID, userID uuid.UUID, amount string) *chapap
 		CustomerEmail: "buyer@test.local",
 		CustomerFirst: "Buyer",
 		Meta: map[string]interface{}{
-			"product_id":   productID.String(),
+			"auction_id":   auctionID.String(),
 			"user_id":      userID.String(),
 			"entrance_fee": amount,
 		},
@@ -53,27 +53,27 @@ func chapaSnap(txRef string, productID, userID uuid.UUID, amount string) *chapap
 
 func TestChapaWebhook_HappyPath_CreatesParticipationAndMarksPaymentProcessed(t *testing.T) {
 	s := stack(t)
-	r := testutil.SeedLUBProduct(t, s.PG, testutil.ProductOpts{
-		Status:      domain.ProductStatusActive,
+	a := testutil.SeedAuction(t, s.PG, testutil.AuctionOpts{
+		Status:      domain.AuctionStatusActive,
 		EntranceFee: domain.NewMoney(50),
 		StartInPast: true,
 	})
 	userID := testutil.SeedParticipant(t, s.PG, domain.Zero())
 	tx := "TXREF-HAPPY-" + uuid.New().String()[:8]
 
-	err := s.Chapa.ProcessVerified(context.Background(), chapaSnap(tx, r.ID, userID, "50"))
+	err := s.Chapa.ProcessVerified(context.Background(), chapaSnap(tx, a.ID, userID, "50"))
 	if err != nil {
 		t.Fatalf("ProcessVerified: %v", err)
 	}
 
-	part, err := s.LUB.GetParticipation(r.ID, userID.String())
+	part, err := s.LUB.GetParticipation(a.ID, userID.String())
 	if err != nil {
 		t.Fatalf("GetParticipation: %v", err)
 	}
 	if part == nil {
 		t.Fatal("participation should exist")
 	}
-	if part.ProductID != r.ID || part.ParticipantID != userID.String() {
+	if part.AuctionID != a.ID || part.ParticipantID != userID.String() {
 		t.Fatalf("participation bound to wrong ids: %+v", part)
 	}
 	if part.FeePaid.String() != "50.00" {
@@ -94,14 +94,14 @@ func TestChapaWebhook_HappyPath_CreatesParticipationAndMarksPaymentProcessed(t *
 
 func TestChapaWebhook_DuplicateDelivery_IsIdempotent(t *testing.T) {
 	s := stack(t)
-	r := testutil.SeedLUBProduct(t, s.PG, testutil.ProductOpts{
-		Status:      domain.ProductStatusActive,
+	a := testutil.SeedAuction(t, s.PG, testutil.AuctionOpts{
+		Status:      domain.AuctionStatusActive,
 		EntranceFee: domain.NewMoney(10),
 		StartInPast: true,
 	})
 	userID := testutil.SeedParticipant(t, s.PG, domain.Zero())
 	tx := "TXREF-DUPE-" + uuid.New().String()[:8]
-	snap := chapaSnap(tx, r.ID, userID, "10")
+	snap := chapaSnap(tx, a.ID, userID, "10")
 
 	if err := s.Chapa.ProcessVerified(context.Background(), snap); err != nil {
 		t.Fatalf("first delivery: %v", err)
@@ -111,7 +111,7 @@ func TestChapaWebhook_DuplicateDelivery_IsIdempotent(t *testing.T) {
 	}
 
 	var count int64
-	if err := s.PG.DB.Model(&domain.LUBParticipation{}).Where("transaction_id = ?", tx).Count(&count).Error; err != nil {
+	if err := s.PG.DB.Model(&domain.AuctionParticipation{}).Where("transaction_id = ?", tx).Count(&count).Error; err != nil {
 		t.Fatalf("count participations: %v", err)
 	}
 	if count != 1 {
@@ -121,14 +121,14 @@ func TestChapaWebhook_DuplicateDelivery_IsIdempotent(t *testing.T) {
 
 func TestChapaWebhook_VerifyStatusNotSuccess_RecordsFailureNoParticipation(t *testing.T) {
 	s := stack(t)
-	r := testutil.SeedLUBProduct(t, s.PG, testutil.ProductOpts{
-		Status:      domain.ProductStatusActive,
+	a := testutil.SeedAuction(t, s.PG, testutil.AuctionOpts{
+		Status:      domain.AuctionStatusActive,
 		EntranceFee: domain.NewMoney(10),
 		StartInPast: true,
 	})
 	userID := testutil.SeedParticipant(t, s.PG, domain.Zero())
 	tx := "TXREF-DECLINED-" + uuid.New().String()[:8]
-	snap := chapaSnap(tx, r.ID, userID, "10")
+	snap := chapaSnap(tx, a.ID, userID, "10")
 	snap.DataStatus = "failed"
 
 	if err := s.Chapa.ProcessVerified(context.Background(), snap); err != nil {
@@ -143,7 +143,7 @@ func TestChapaWebhook_VerifyStatusNotSuccess_RecordsFailureNoParticipation(t *te
 		t.Errorf("ledger status: want failed, got %s", p.Status)
 	}
 
-	part, _ := s.LUB.GetParticipation(r.ID, userID.String())
+	part, _ := s.LUB.GetParticipation(a.ID, userID.String())
 	if part != nil {
 		t.Errorf("participation was created for a declined payment")
 	}
@@ -178,15 +178,15 @@ func TestChapaWebhook_MetaMissing_RecordsFailureNoParticipation(t *testing.T) {
 
 func TestChapaRetry_ParticipationExists_MarksProcessed(t *testing.T) {
 	s := stack(t)
-	r := testutil.SeedLUBProduct(t, s.PG, testutil.ProductOpts{
-		Status:      domain.ProductStatusActive,
+	a := testutil.SeedAuction(t, s.PG, testutil.AuctionOpts{
+		Status:      domain.AuctionStatusActive,
 		EntranceFee: domain.NewMoney(10),
 		StartInPast: true,
 	})
 	userID := testutil.SeedParticipant(t, s.PG, domain.Zero())
 	tx := "TXREF-RECONCILE-" + uuid.New().String()[:8]
 
-	if err := s.Chapa.ProcessVerified(context.Background(), chapaSnap(tx, r.ID, userID, "10")); err != nil {
+	if err := s.Chapa.ProcessVerified(context.Background(), chapaSnap(tx, a.ID, userID, "10")); err != nil {
 		t.Fatalf("ProcessVerified: %v", err)
 	}
 

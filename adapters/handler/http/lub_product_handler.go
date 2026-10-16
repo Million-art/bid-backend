@@ -13,19 +13,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// LUBProductHandler handles admin CRUD for LUB products.
-type LUBProductHandler struct {
+// AuctionAdminHandler handles admin CRUD for auctions.
+type AuctionAdminHandler struct {
 	svc *lub.Service
 }
 
-func NewLUBProductHandler(svc *lub.Service) *LUBProductHandler {
-	return &LUBProductHandler{svc: svc}
+func NewAuctionAdminHandler(svc *lub.Service) *AuctionAdminHandler {
+	return &AuctionAdminHandler{svc: svc}
 }
 
-// ---------------------- Request/Response types ----------------------
-
-type CreateProductRequest struct {
-	Name        string   `json:"name"        validate:"required,min=2,max=255"`
+type CreateAuctionRequest struct {
+	Title       string   `json:"title"       validate:"omitempty,min=2,max=255"`
+	Name        string   `json:"name"        validate:"omitempty,min=2,max=255"`
 	Description string   `json:"description" validate:"omitempty"`
 	ImageURL    string   `json:"imageUrl"    validate:"omitempty,url"`
 	VideoURL    string   `json:"videoUrl"    validate:"omitempty,url"`
@@ -36,7 +35,8 @@ type CreateProductRequest struct {
 	CloseAt     *string  `json:"closeAt"     validate:"omitempty"`
 }
 
-type UpdateProductRequest struct {
+type UpdateAuctionRequest struct {
+	Title       string   `json:"title"       validate:"omitempty,min=2,max=255"`
 	Name        string   `json:"name"        validate:"omitempty,min=2,max=255"`
 	Description string   `json:"description" validate:"omitempty"`
 	ImageURL    string   `json:"imageUrl"    validate:"omitempty"`
@@ -48,14 +48,11 @@ type UpdateProductRequest struct {
 	CloseAt     *string  `json:"closeAt"     validate:"omitempty"`
 }
 
-type PostponeProductRequest struct {
+type PostponeAuctionRequest struct {
 	NewCloseAt string `json:"newCloseAt" validate:"required"`
 }
 
-// ---------------------- Handlers ----------------------
-
-// Create creates a new LUB product (admin only).
-func (h *LUBProductHandler) Create(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) Create(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -65,13 +62,21 @@ func (h *LUBProductHandler) Create(c fiber.Ctx) error {
 	}
 	actorID, _ := uuid.Parse(actorIDStr)
 
-	var req CreateProductRequest
+	var req CreateAuctionRequest
 	if err := validate.BindAndValidate(c, &req); err != nil {
 		return err
 	}
 
-	p := &domain.Product{
-		Name:        req.Name,
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = strings.TrimSpace(req.Name)
+	}
+	if len(title) < 2 {
+		return response.Error(c, fiber.StatusBadRequest, "title is required (min 2 chars)", nil)
+	}
+
+	a := &domain.Auction{
+		Title:       title,
 		Description: req.Description,
 		ImageURL:    req.ImageURL,
 		VideoURL:    req.VideoURL,
@@ -80,27 +85,26 @@ func (h *LUBProductHandler) Create(c fiber.Ctx) error {
 	}
 	if req.MaxBidValue != nil {
 		v := domain.NewMoney(*req.MaxBidValue)
-		p.MaxBidValue = &v
+		a.MaxBidValue = &v
 	}
 	if req.StartAt != nil {
 		if t, err := time.Parse(time.RFC3339, *req.StartAt); err == nil {
-			p.StartAt = &t
+			a.StartAt = &t
 		}
 	}
 	if req.CloseAt != nil {
 		if t, err := time.Parse(time.RFC3339, *req.CloseAt); err == nil {
-			p.CloseAt = &t
+			a.CloseAt = &t
 		}
 	}
 
-	if err := h.svc.CreateProduct(c.Context(), p, actorID); err != nil {
+	if err := h.svc.CreateAuction(c.Context(), a, actorID); err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusCreated, "Product created", p)
+	return response.Success(c, fiber.StatusCreated, "Auction created", a)
 }
 
-// List returns a paginated list of all products (admin).
-func (h *LUBProductHandler) List(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) List(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -111,33 +115,31 @@ func (h *LUBProductHandler) List(c fiber.Ctx) error {
 	status := strings.TrimSpace(c.Query("status"))
 	search := strings.TrimSpace(c.Query("search"))
 
-	products, total, err := h.svc.ListProducts(status, search, page, limit)
+	auctions, total, err := h.svc.ListAuctions(status, search, page, limit)
 	if err != nil {
-		return response.Error(c, fiber.StatusInternalServerError, "Failed to list products", err)
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to list auctions", err)
 	}
-	return response.Success(c, fiber.StatusOK, "Products retrieved", fiber.Map{
-		"items": products,
+	return response.Success(c, fiber.StatusOK, "Auctions retrieved", fiber.Map{
+		"items": auctions,
 		"total": total,
 		"page":  page,
 		"limit": limit,
 	})
 }
 
-// GetByID returns a single product.
-func (h *LUBProductHandler) GetByID(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) GetByID(c fiber.Ctx) error {
 	id, err := PathParamUUID(c, "id", "id")
 	if err != nil {
 		return err
 	}
-	p, err := h.svc.GetProductByID(id)
+	a, err := h.svc.GetAuctionByID(id)
 	if err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusOK, "Product found", p)
+	return response.Success(c, fiber.StatusOK, "Auction found", a)
 }
 
-// Update updates mutable fields on a product.
-func (h *LUBProductHandler) Update(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) Update(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -148,13 +150,18 @@ func (h *LUBProductHandler) Update(c fiber.Ctx) error {
 	actorIDStr, _ := GetUserIDOrUnauthorized(c)
 	actorID, _ := uuid.Parse(actorIDStr)
 
-	var req UpdateProductRequest
+	var req UpdateAuctionRequest
 	if err := validate.BindAndValidate(c, &req); err != nil {
 		return err
 	}
 
-	updates := &domain.Product{
-		Name:        req.Name,
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = strings.TrimSpace(req.Name)
+	}
+
+	updates := &domain.Auction{
+		Title:       title,
 		Description: req.Description,
 		ImageURL:    req.ImageURL,
 		VideoURL:    req.VideoURL,
@@ -176,15 +183,14 @@ func (h *LUBProductHandler) Update(c fiber.Ctx) error {
 		}
 	}
 
-	if err := h.svc.UpdateProduct(c.Context(), id, updates, actorID); err != nil {
+	if err := h.svc.UpdateAuction(c.Context(), id, updates, actorID); err != nil {
 		return mapLUBError(c, err)
 	}
-	p, _ := h.svc.GetProductByID(id)
-	return response.Success(c, fiber.StatusOK, "Product updated", p)
+	a, _ := h.svc.GetAuctionByID(id)
+	return response.Success(c, fiber.StatusOK, "Auction updated", a)
 }
 
-// Activate transitions a product from draft → active.
-func (h *LUBProductHandler) Activate(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) Activate(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -195,14 +201,13 @@ func (h *LUBProductHandler) Activate(c fiber.Ctx) error {
 	actorIDStr, _ := GetUserIDOrUnauthorized(c)
 	actorID, _ := uuid.Parse(actorIDStr)
 
-	if err := h.svc.ActivateProduct(c.Context(), id, actorID); err != nil {
+	if err := h.svc.ActivateAuction(c.Context(), id, actorID); err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusOK, "Product activated", nil)
+	return response.Success(c, fiber.StatusOK, "Auction activated", nil)
 }
 
-// Postpone extends the CloseAt of a product.
-func (h *LUBProductHandler) Postpone(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) Postpone(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -213,7 +218,7 @@ func (h *LUBProductHandler) Postpone(c fiber.Ctx) error {
 	actorIDStr, _ := GetUserIDOrUnauthorized(c)
 	actorID, _ := uuid.Parse(actorIDStr)
 
-	var req PostponeProductRequest
+	var req PostponeAuctionRequest
 	if err := validate.BindAndValidate(c, &req); err != nil {
 		return err
 	}
@@ -221,14 +226,13 @@ func (h *LUBProductHandler) Postpone(c fiber.Ctx) error {
 	if parseErr != nil {
 		return response.Error(c, fiber.StatusBadRequest, "Invalid newCloseAt format (use RFC3339)", parseErr)
 	}
-	if err := h.svc.PostponeProduct(c.Context(), id, newCloseAt, actorID); err != nil {
+	if err := h.svc.PostponeAuction(c.Context(), id, newCloseAt, actorID); err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusOK, "Product postponed", nil)
+	return response.Success(c, fiber.StatusOK, "Auction postponed", nil)
 }
 
-// Close stops accepting bids for a product without executing the draw.
-func (h *LUBProductHandler) Close(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) Close(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -239,14 +243,13 @@ func (h *LUBProductHandler) Close(c fiber.Ctx) error {
 	actorIDStr, _ := GetUserIDOrUnauthorized(c)
 	actorID, _ := uuid.Parse(actorIDStr)
 
-	if err := h.svc.CloseProduct(c.Context(), id, actorID); err != nil {
+	if err := h.svc.CloseAuction(c.Context(), id, actorID); err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusOK, "Product closed", nil)
+	return response.Success(c, fiber.StatusOK, "Auction closed", nil)
 }
 
-// Cancel cancels a product.
-func (h *LUBProductHandler) Cancel(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) Cancel(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -257,14 +260,13 @@ func (h *LUBProductHandler) Cancel(c fiber.Ctx) error {
 	actorIDStr, _ := GetUserIDOrUnauthorized(c)
 	actorID, _ := uuid.Parse(actorIDStr)
 
-	if err := h.svc.CancelProduct(c.Context(), id, actorID); err != nil {
+	if err := h.svc.CancelAuction(c.Context(), id, actorID); err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusOK, "Product cancelled", nil)
+	return response.Success(c, fiber.StatusOK, "Auction cancelled", nil)
 }
 
-// ExecuteDraw manually triggers the draw for a product.
-func (h *LUBProductHandler) ExecuteDraw(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) ExecuteDraw(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -285,8 +287,7 @@ func (h *LUBProductHandler) ExecuteDraw(c fiber.Ctx) error {
 	return response.Success(c, fiber.StatusOK, "Draw executed successfully", result)
 }
 
-// ListParticipants returns participants for a product (admin).
-func (h *LUBProductHandler) ListParticipants(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) ListParticipants(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -310,8 +311,7 @@ func (h *LUBProductHandler) ListParticipants(c fiber.Ctx) error {
 	})
 }
 
-// ListBidEntries returns all bid entries for a product (admin).
-func (h *LUBProductHandler) ListBidEntries(c fiber.Ctx) error {
+func (h *AuctionAdminHandler) ListBids(c fiber.Ctx) error {
 	if err := requireAdminRole(c); err != nil {
 		return err
 	}
@@ -323,19 +323,17 @@ func (h *LUBProductHandler) ListBidEntries(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	entries, total, err := h.svc.ListProductBidEntries(id, page, limit)
+	bids, total, err := h.svc.ListAuctionBids(id, page, limit)
 	if err != nil {
-		return response.Error(c, fiber.StatusInternalServerError, "Failed to list bid entries", err)
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to list bids", err)
 	}
-	return response.Success(c, fiber.StatusOK, "Bid entries retrieved", fiber.Map{
-		"items": entries,
+	return response.Success(c, fiber.StatusOK, "Bids retrieved", fiber.Map{
+		"items": bids,
 		"total": total,
 		"page":  page,
 		"limit": limit,
 	})
 }
-
-// ---------------------- Helpers ----------------------
 
 func requireAdminRole(c fiber.Ctx) error {
 	role := GetUserRole(c)

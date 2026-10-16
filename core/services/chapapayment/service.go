@@ -56,14 +56,13 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 	chapaOK := strings.EqualFold(strings.TrimSpace(snap.APIStatus), "success") &&
 		strings.EqualFold(strings.TrimSpace(snap.DataStatus), "success")
 
-	productID, userID, refBy, pricePaid, parseErr := parseParticipationMeta(snap)
+	auctionID, userID, pricePaid, parseErr := parseParticipationMeta(snap)
 	if parseErr != nil {
 		existing, lookupErr := s.repo.GetByTxRef(ctx, txRef)
 		if lookupErr == nil && existing != nil &&
-			existing.UserID != nil && existing.ProductID != nil {
-			productID = *existing.ProductID
+			existing.UserID != nil && existing.AuctionID != nil {
+			auctionID = *existing.AuctionID
 			userID = *existing.UserID
-			refBy = existing.ReferredBy
 			pricePaid = existing.Amount
 			parseErr = nil
 			s.log.Info("chapa_meta_recovered_from_pending_row", "tx_ref", txRef)
@@ -86,14 +85,13 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 
 	if !chapaOK {
 		p := &domain.Payment{
-			TxRef:      txRef,
-			UserID:     ptrUUID(userID),
-			ProductID:  ptrUUID(productID),
-			Amount:     pricePaid,
-			Status:     domain.PaymentStatusFailed,
-			Processed:  true,
-			ReferredBy: refBy,
-			LastError:  fmt.Sprintf("chapa verify status not success (api=%q data=%q)", snap.APIStatus, snap.DataStatus),
+			TxRef:     txRef,
+			UserID:    ptrUUID(userID),
+			AuctionID: ptrUUID(auctionID),
+			Amount:    pricePaid,
+			Status:    domain.PaymentStatusFailed,
+			Processed: true,
+			LastError: fmt.Sprintf("chapa verify status not success (api=%q data=%q)", snap.APIStatus, snap.DataStatus),
 		}
 		if err := s.repo.Upsert(ctx, p); err != nil {
 			return fmt.Errorf("payment ledger upsert (chapa not success): %w", err)
@@ -106,18 +104,17 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		TxRef:          txRef,
 		ChapaReference: strings.TrimSpace(snap.ChapaReference),
 		UserID:         ptrUUID(userID),
-		ProductID:      ptrUUID(productID),
+		AuctionID:      ptrUUID(auctionID),
 		Amount:         pricePaid,
 		Status:         domain.PaymentStatusSuccess,
 		Processed:      false,
-		ReferredBy:     refBy,
 		LastError:      "",
 	}
 	if err := s.repo.Upsert(ctx, p); err != nil {
 		return fmt.Errorf("payment ledger upsert: %w", err)
 	}
 
-	if _, err := s.lubSvc.GetParticipation(productID, userID.String()); err == nil {
+	if existingPart, err := s.lubSvc.GetParticipation(auctionID, userID.String()); err == nil && existingPart != nil {
 		if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 			s.log.Error("chapa_mark_processed_failed", "tx_ref", txRef, "error", err)
 		}
@@ -125,9 +122,7 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		return nil
 	}
 
-	name, email, phone := s.enrichParticipant(userID, snap)
-
-	_, err := s.lubSvc.RecordParticipation(ctx, productID, userID.String(), name, email, phone, txRef, pricePaid)
+	_, err := s.lubSvc.RecordParticipation(ctx, auctionID, userID.String(), txRef, pricePaid)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
@@ -138,10 +133,10 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		}
 		_ = s.repo.SetFulfillmentFailure(ctx, txRef, err)
 		if domain.IsRetryableFulfillmentError(err) {
-			s.log.Error("chapa_participation_record_failed", "tx_ref", txRef, "product_id", productID.String(), "user_id", userID.String(), "error", err)
+			s.log.Error("chapa_participation_record_failed", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", userID.String(), "error", err)
 			return ErrFulfillmentDeferred
 		} else {
-			s.log.Warn("chapa_participation_record_failed_no_retry", "tx_ref", txRef, "product_id", productID.String(), "user_id", userID.String(), "error", err)
+			s.log.Warn("chapa_participation_record_failed_no_retry", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", userID.String(), "error", err)
 			if mErr := s.repo.MarkProcessed(ctx, txRef); mErr != nil {
 				s.log.Error("chapa_mark_processed_failed_after_non_retryable", "tx_ref", txRef, "error", mErr)
 			}
@@ -149,7 +144,7 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		}
 	}
 
-	if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, userID.String(), productID, "", pricePaid); err != nil {
+	if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, userID.String(), auctionID, "", pricePaid); err != nil {
 		s.log.Error("failed to send participation notification", "tx_ref", txRef, "user_id", userID, "error", err)
 	}
 
@@ -157,25 +152,24 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		s.log.Error("chapa_mark_processed_failed", "tx_ref", txRef, "error", err)
 		return fmt.Errorf("mark processed: %w", err)
 	}
-	s.log.Info("chapa_fulfillment_complete", "tx_ref", txRef, "product_id", productID.String(), "user_id", userID.String())
+	s.log.Info("chapa_fulfillment_complete", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", userID.String())
 	return nil
 }
 
 func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool {
-	if p.UserID == nil || p.ProductID == nil {
+	if p.UserID == nil || p.AuctionID == nil {
 		s.log.Warn("chapa_retry_skip_incomplete", "tx_ref", p.TxRef)
 		return false
 	}
 	txRef := p.TxRef
-	if _, err := s.lubSvc.GetParticipation(*p.ProductID, p.UserID.String()); err == nil {
+	if existingPart, err := s.lubSvc.GetParticipation(*p.AuctionID, p.UserID.String()); err == nil && existingPart != nil {
 		if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 			s.log.Error("chapa_retry_mark_processed_failed", "tx_ref", txRef, "error", err)
 			return false
 		}
 		return true
 	}
-	name, email, phone := s.enrichParticipant(*p.UserID, &VerifiedSnapshot{})
-	_, err := s.lubSvc.RecordParticipation(ctx, *p.ProductID, p.UserID.String(), name, email, phone, txRef, p.Amount)
+	_, err := s.lubSvc.RecordParticipation(ctx, *p.AuctionID, p.UserID.String(), txRef, p.Amount)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			_ = s.repo.MarkProcessed(ctx, txRef)
@@ -217,20 +211,19 @@ func (s *Service) RetryPaymentByTxRef(ctx context.Context, txRef string) (fulfil
 	return s.tryFulfillPayment(ctx, p), nil
 }
 
-func (s *Service) CreatePendingPayment(ctx context.Context, txRef string, userID, productID uuid.UUID, amount domain.Money, referredBy *uuid.UUID) error {
+func (s *Service) CreatePendingPayment(ctx context.Context, txRef string, userID, auctionID uuid.UUID, amount domain.Money) error {
 	p := &domain.Payment{
-		TxRef:      txRef,
-		UserID:     ptrUUID(userID),
-		ProductID:  ptrUUID(productID),
-		Amount:     amount,
-		Status:     domain.PaymentStatusPending,
-		Processed:  false,
-		ReferredBy: referredBy,
+		TxRef:     txRef,
+		UserID:    ptrUUID(userID),
+		AuctionID: ptrUUID(auctionID),
+		Amount:    amount,
+		Status:    domain.PaymentStatusPending,
+		Processed: false,
 	}
 	if err := s.repo.Upsert(ctx, p); err != nil {
 		return fmt.Errorf("chapa: create pending payment: %w", err)
 	}
-	s.log.Info("chapa_pending_payment_created", "tx_ref", txRef, "user_id", userID, "product_id", productID)
+	s.log.Info("chapa_pending_payment_created", "tx_ref", txRef, "user_id", userID, "auction_id", auctionID)
 	return nil
 }
 
@@ -252,52 +245,33 @@ func (s *Service) ListSuccessUnprocessed(ctx context.Context, limit int) ([]doma
 	return s.repo.ListSuccessUnprocessed(ctx, limit)
 }
 
-func (s *Service) enrichParticipant(userID uuid.UUID, snap *VerifiedSnapshot) (name, email, phone string) {
-	name = strings.TrimSpace(snap.CustomerFirst)
-	email = strings.TrimSpace(snap.CustomerEmail)
-	phone = ""
-	u, err := s.users.GetByID(userID.String())
-	if err == nil && u != nil {
-		if strings.TrimSpace(u.FullName) != "" {
-			name = u.FullName
-		}
-		if strings.TrimSpace(u.Email) != "" {
-			email = u.Email
-		}
-		phone = u.Phone
-	}
-	return name, email, phone
-}
-
-func parseParticipationMeta(snap *VerifiedSnapshot) (productID, userID uuid.UUID, refBy *uuid.UUID, price domain.Money, err error) {
+func parseParticipationMeta(snap *VerifiedSnapshot) (auctionID, userID uuid.UUID, price domain.Money, err error) {
 	meta := snap.Meta
 	if meta == nil {
-		return uuid.Nil, uuid.Nil, nil, domain.Zero(), fmt.Errorf("chapa webhook missing meta: %w", domain.ErrInvalidInput)
+		return uuid.Nil, uuid.Nil, domain.Zero(), fmt.Errorf("chapa webhook missing meta: %w", domain.ErrInvalidInput)
 	}
-	rs, _ := meta["product_id"].(string)
+	as, _ := meta["auction_id"].(string)
+	if as == "" {
+		as, _ = meta["product_id"].(string)
+	}
 	us, _ := meta["user_id"].(string)
-	productID, _ = uuid.Parse(strings.TrimSpace(rs))
+	auctionID, _ = uuid.Parse(strings.TrimSpace(as))
 	userID, _ = uuid.Parse(strings.TrimSpace(us))
-	if productID == uuid.Nil || userID == uuid.Nil {
-		return uuid.Nil, uuid.Nil, nil, domain.Zero(), fmt.Errorf("chapa webhook missing product_id or user_id: %w", domain.ErrInvalidInput)
-	}
-	if refRaw, ok := meta["referred_by"].(string); ok {
-		if parsed, e := uuid.Parse(strings.TrimSpace(refRaw)); e == nil && parsed != uuid.Nil && parsed != userID {
-			refBy = &parsed
-		}
+	if auctionID == uuid.Nil || userID == uuid.Nil {
+		return uuid.Nil, uuid.Nil, domain.Zero(), fmt.Errorf("chapa webhook missing auction_id or user_id: %w", domain.ErrInvalidInput)
 	}
 	switch a := snap.Amount.(type) {
 	case string:
 		price, err = domain.NewMoneyFromString(strings.TrimSpace(a))
 		if err != nil {
-			return uuid.Nil, uuid.Nil, nil, domain.Zero(), err
+			return uuid.Nil, uuid.Nil, domain.Zero(), err
 		}
 	case float64:
 		price = domain.NewMoney(a)
 	default:
 		price = domain.Zero()
 	}
-	return productID, userID, refBy, price, nil
+	return auctionID, userID, price, nil
 }
 
 func ptrUUID(id uuid.UUID) *uuid.UUID {
@@ -305,11 +279,4 @@ func ptrUUID(id uuid.UUID) *uuid.UUID {
 		return nil
 	}
 	return &id
-}
-
-func referredByString(ref *uuid.UUID) string {
-	if ref == nil {
-		return ""
-	}
-	return ref.String()
 }

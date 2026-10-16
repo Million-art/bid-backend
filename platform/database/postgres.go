@@ -16,18 +16,99 @@ func Migrate(db *gorm.DB) {
 	if db == nil {
 		return
 	}
-	_ = db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&domain.User{},
 		&domain.ParticipantUser{},
-		&domain.Product{},
-		&domain.LUBParticipation{},
-		&domain.BidEntry{},
+		&domain.Auction{},
+		&domain.AuctionParticipation{},
+		&domain.Bid{},
 		&domain.Payment{},
 		&domain.RefundRecord{},
 		&domain.Notification{},
 		&domain.AuditLog{},
 		&domain.PlatformLegalDocument{},
-	)
+	); err != nil {
+		slog.Error("database: automigrate failed", "error", err)
+	}
+
+	constraints := []string{
+		// Auctions constraints
+		`DO $$ BEGIN
+			ALTER TABLE auctions ADD CONSTRAINT chk_auctions_entrance_fee CHECK (entrance_fee > 0);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE auctions ADD CONSTRAINT chk_auctions_min_bid_value CHECK (min_bid_value > 0);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE auctions ADD CONSTRAINT chk_auctions_max_bid_value CHECK (max_bid_value IS NULL OR max_bid_value >= min_bid_value);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE auctions ADD CONSTRAINT chk_auctions_status CHECK (status IN ('draft','active','postponed','closed','executed','cancelled'));
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// Auction participations constraints
+		`DO $$ BEGIN
+			ALTER TABLE auction_participations ADD CONSTRAINT chk_participations_fee_paid CHECK (fee_paid > 0);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE auction_participations ADD CONSTRAINT chk_participations_status CHECK (status IN ('active','refunded'));
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE auction_participations ADD CONSTRAINT fk_participations_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE CASCADE;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// Auction bids constraints
+		`DO $$ BEGIN
+			ALTER TABLE auction_bids ADD CONSTRAINT chk_bids_bid_value CHECK (bid_value > 0);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE auction_bids ADD CONSTRAINT fk_bids_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE CASCADE;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// Winner bid FK on auctions (deferred after auction_bids exists)
+		`DO $$ BEGIN
+			ALTER TABLE auctions ADD CONSTRAINT fk_auctions_winner_bid FOREIGN KEY (winner_bid_id) REFERENCES auction_bids(id) ON UPDATE CASCADE ON DELETE SET NULL;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// Payments constraints
+		`DO $$ BEGIN
+			ALTER TABLE payments ADD CONSTRAINT chk_payments_amount CHECK (amount >= 0);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE payments ADD CONSTRAINT chk_payments_status CHECK (status IN ('pending','success','failed','refunded'));
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE payments ADD CONSTRAINT fk_payments_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE SET NULL;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE payments ADD CONSTRAINT fk_payments_participation FOREIGN KEY (participation_id) REFERENCES auction_participations(id) ON UPDATE CASCADE ON DELETE SET NULL;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// Refund records constraints
+		`DO $$ BEGIN
+			ALTER TABLE refund_records ADD CONSTRAINT chk_refunds_amount CHECK (amount > 0);
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE refund_records ADD CONSTRAINT chk_refunds_status CHECK (status IN ('pending','processing','success','failed','reversed'));
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE refund_records ADD CONSTRAINT fk_refunds_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE RESTRICT;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+		`DO $$ BEGIN
+			ALTER TABLE refund_records ADD CONSTRAINT fk_refunds_participation FOREIGN KEY (participation_id) REFERENCES auction_participations(id) ON UPDATE CASCADE ON DELETE SET NULL;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+		// Notifications FK
+		`DO $$ BEGIN
+			ALTER TABLE notifications ADD CONSTRAINT fk_notifications_auction FOREIGN KEY (auction_id) REFERENCES auctions(id) ON UPDATE CASCADE ON DELETE SET NULL;
+		EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+	}
+
+	for _, stmt := range constraints {
+		if err := db.Exec(stmt).Error; err != nil {
+			slog.Warn("database: constraint setup warning", "error", err)
+		}
+	}
 }
 
 func Connect(cfg *env.Config) (*gorm.DB, error) {
@@ -40,7 +121,7 @@ func Connect(cfg *env.Config) (*gorm.DB, error) {
 		DSN:                  dsn,
 		PreferSimpleProtocol: true,
 	}), &gorm.Config{
-		DisableForeignKeyConstraintWhenMigrating: true, // winner_id, participant_id can reference client-backend IDs not in admin users
+		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
@@ -71,9 +152,6 @@ func databaseDSN(cfg *env.Config) (string, error) {
 	query := parsed.Query()
 	if query.Get("sslmode") == "" && cfg.DBSSLMode != "" {
 		query.Set("sslmode", cfg.DBSSLMode)
-	}
-	if query.Get("channel_binding") == "" && cfg.DBChannelBinding != "" {
-		query.Set("channel_binding", cfg.DBChannelBinding)
 	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil

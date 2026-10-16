@@ -20,15 +20,15 @@ func NewPaymentLedgerRepository(db *gorm.DB) *PaymentLedgerRepo {
 	return &PaymentLedgerRepo{db: db}
 }
 
-const safePaymentSelect = `id, tx_ref, chapa_reference, user_id, product_id, participation_id,
-	amount, status, processed, retry_disabled, referred_by, last_error, created_at, updated_at`
+const safePaymentSelect = `id, tx_ref, chapa_reference, user_id, auction_id, participation_id,
+	amount, status, processed, retry_disabled, last_error, created_at, updated_at`
 
 const paymentStaffEnrichSelect = safePaymentSelect + `,
 	participant_users.full_name AS participant_name,
 	participant_users.email AS participant_email,
-	lub_products.name AS product_name,
+	auctions.title AS auction_title,
 	EXISTS (
-		SELECT 1 FROM lub_participations lp WHERE lp.transaction_id = payments.tx_ref
+		SELECT 1 FROM auction_participations ap WHERE ap.transaction_id = payments.tx_ref
 	) AS has_participation,
 	COALESCE((
 		SELECT rr.status FROM refund_records rr
@@ -63,13 +63,12 @@ func (r *PaymentLedgerRepo) Upsert(ctx context.Context, p *domain.Payment) error
 	updates := map[string]interface{}{
 		"chapa_reference":  p.ChapaReference,
 		"user_id":          p.UserID,
-		"product_id":       p.ProductID,
+		"auction_id":       p.AuctionID,
 		"participation_id": p.ParticipationID,
 		"amount":           p.Amount,
 		"status":           p.Status,
 		"processed":        p.Processed,
 		"retry_disabled":   p.RetryDisabled,
-		"referred_by":      p.ReferredBy,
 		"last_error":       p.LastError,
 		"updated_at":       time.Now(),
 	}
@@ -123,7 +122,7 @@ func (r *PaymentLedgerRepo) ListStaff(ctx context.Context, f ports.PaymentListFi
 		domain.Payment
 		ParticipantName  string `gorm:"column:participant_name"`
 		ParticipantEmail string `gorm:"column:participant_email"`
-		ProductName      string `gorm:"column:product_name"`
+		AuctionTitle     string `gorm:"column:auction_title"`
 		HasParticipation bool   `gorm:"column:has_participation"`
 		RefundStatus     string `gorm:"column:refund_status"`
 	}
@@ -138,9 +137,9 @@ func (r *PaymentLedgerRepo) ListStaff(ctx context.Context, f ports.PaymentListFi
 		term := "%" + search + "%"
 		countQ = countQ.
 			Joins("LEFT JOIN participant_users ON participant_users.id = payments.user_id").
-			Joins("LEFT JOIN lub_products ON lub_products.id = payments.product_id").
+			Joins("LEFT JOIN auctions ON auctions.id = payments.auction_id").
 			Where(
-				"payments.tx_ref ILIKE ? OR participant_users.email ILIKE ? OR participant_users.full_name ILIKE ? OR lub_products.name ILIKE ?",
+				"payments.tx_ref ILIKE ? OR participant_users.email ILIKE ? OR participant_users.full_name ILIKE ? OR auctions.title ILIKE ?",
 				term, term, term, term,
 			).
 			Distinct("payments.id")
@@ -155,13 +154,13 @@ func (r *PaymentLedgerRepo) ListStaff(ctx context.Context, f ports.PaymentListFi
 		r.db.WithContext(ctx).Session(paymentListSession).Table("payments").
 			Select(paymentStaffEnrichSelect).
 			Joins("LEFT JOIN participant_users ON participant_users.id = payments.user_id").
-			Joins("LEFT JOIN lub_products ON lub_products.id = payments.product_id"),
+			Joins("LEFT JOIN auctions ON auctions.id = payments.auction_id"),
 		f,
 	)
 	if search != "" {
 		term := "%" + search + "%"
 		listQ = listQ.Where(
-			"payments.tx_ref ILIKE ? OR participant_users.email ILIKE ? OR participant_users.full_name ILIKE ? OR lub_products.name ILIKE ?",
+			"payments.tx_ref ILIKE ? OR participant_users.email ILIKE ? OR participant_users.full_name ILIKE ? OR auctions.title ILIKE ?",
 			term, term, term, term,
 		)
 	}
@@ -177,7 +176,7 @@ func (r *PaymentLedgerRepo) ListStaff(ctx context.Context, f ports.PaymentListFi
 			Payment:          rows[i].Payment,
 			ParticipantName:  rows[i].ParticipantName,
 			ParticipantEmail: rows[i].ParticipantEmail,
-			ProductName:      rows[i].ProductName,
+			AuctionTitle:     rows[i].AuctionTitle,
 			HasParticipation: rows[i].HasParticipation,
 			RefundStatus:     rows[i].RefundStatus,
 		}

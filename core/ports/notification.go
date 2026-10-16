@@ -16,7 +16,6 @@ type NotificationRepository interface {
 	GetUnreadCount(userID uuid.UUID, userType string) (int64, error)
 	MarkAsRead(id uuid.UUID) error
 	MarkAllAsRead(userID uuid.UUID, userType string) error
-	MarkByConfirmationID(confirmationID uuid.UUID) error
 	Delete(id uuid.UUID) error
 	DeleteExpired() (int64, error)
 	DeleteOldRead(daysOld int) (int64, error)

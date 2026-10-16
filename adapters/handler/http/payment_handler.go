@@ -72,7 +72,7 @@ func (h *PaymentHandler) List(c fiber.Ctx) error {
 			"updatedAt":        p.UpdatedAt,
 			"participantName":  p.ParticipantName,
 			"participantEmail": p.ParticipantEmail,
-			"productName":      p.ProductName,
+			"auctionTitle":     p.AuctionTitle,
 			"hasParticipation": p.HasParticipation,
 			"refundStatus":     p.RefundStatus,
 			"canRefund":        paymentledger.RefundEligible(p),
@@ -80,8 +80,8 @@ func (h *PaymentHandler) List(c fiber.Ctx) error {
 		if p.UserID != nil {
 			m["userId"] = p.UserID.String()
 		}
-		if p.ProductID != nil {
-			m["productId"] = p.ProductID.String()
+		if p.AuctionID != nil {
+			m["auctionId"] = p.AuctionID.String()
 		}
 		if p.ParticipationID != nil {
 			m["participationId"] = p.ParticipationID.String()

@@ -392,16 +392,6 @@ func maskEmail(email string) string {
 	return masked + "@" + domain
 }
 
-func maskPhone(phone string) string {
-	if phone == "" {
-		return ""
-	}
-	if len(phone) <= 4 {
-		return strings.Repeat("*", len(phone))
-	}
-	return strings.Repeat("*", len(phone)-4) + phone[len(phone)-4:]
-}
-
 func generateNumericOTP(length int) string {
 	const digits = "0123456789"
 	var result strings.Builder

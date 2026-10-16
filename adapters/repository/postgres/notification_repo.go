@@ -92,12 +92,6 @@ func (r *NotificationRepo) MarkAllAsRead(userID uuid.UUID, userType string) erro
 		Updates(map[string]interface{}{"is_read": true, "read_at": now}).Error
 }
 
-func (r *NotificationRepo) MarkByConfirmationID(confirmationID uuid.UUID) error {
-	now := time.Now()
-	return r.db.Model(&domain.Notification{}).Where("confirmation_id = ?", confirmationID).
-		Updates(map[string]interface{}{"is_read": true, "read_at": now}).Error
-}
-
 func (r *NotificationRepo) Delete(id uuid.UUID) error {
 	return r.db.Delete(&domain.Notification{}, id).Error
 }

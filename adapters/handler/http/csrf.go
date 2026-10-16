@@ -40,33 +40,17 @@ type csrfPayload struct {
 	Exp int64  `json:"exp"`
 }
 
-// isExempt returns true for paths that must skip CSRF (external webhooks, service-to-service).
 func isExempt(path string) bool {
-	if path == "/api/kyc-callback" {
+	if strings.HasPrefix(path, "/api/public/auctions/") && strings.HasSuffix(path, "/participate") {
 		return true
 	}
-	if path == "/api/featured/chapa-webhook" {
+	if path == "/api/public/bids" {
 		return true
 	}
-	if path == "/api/agents/pos/chapa-webhook" {
-		return true
-	}
-	// POST /api/public/bids/:id/purchase is authenticated by X-Client-Secret (client-backend).
-	if strings.HasPrefix(path, "/api/public/bids/") && strings.HasSuffix(path, "/purchase") {
-		return true
-	}
-	// LUB service-to-service routes are authenticated by X-Client-Secret, not CSRF.
-	if strings.HasPrefix(path, "/api/public/lub-products/") && strings.HasSuffix(path, "/participate") {
-		return true
-	}
-	if path == "/api/public/lub-bids" {
-		return true
-	}
-	if strings.HasPrefix(path, "/api/public/lub-bids/") {
+	if strings.HasPrefix(path, "/api/public/bids/") {
 		return true
 	}
 	return false
-
 }
 
 // CSRF validates the signed X-CSRF-Token header for state-changing requests.

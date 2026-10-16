@@ -9,130 +9,107 @@ import (
 	"github.com/google/uuid"
 )
 
-// DrawResult contains the outcome of executing a LUB draw.
+// DrawResult contains the outcome of executing an auction draw.
 type DrawResult struct {
-	WinnerEntryID     uuid.UUID
+	WinnerBidID       uuid.UUID
 	WinnerParticipant string
 	WinnerBidValue    domain.Money
 	HasWinner         bool // false when every bid value was placed by >1 participant
 }
 
 // ExecuteDraw finds the lowest unique bid and marks it as the winner.
-// This is the canonical draw algorithm:
-//
-//	SELECT lowest bid_value placed by exactly one participant_id.
-//
-// If no unique bid exists, the product is left in "closed" status and
-// HasWinner=false is returned so the admin can handle it (e.g. extend close_at).
-//
-// trigger is a short string such as "manual" or "scheduled" for audit purposes.
-func (s *Service) ExecuteDraw(ctx context.Context, productID uuid.UUID, trigger string, actorID uuid.UUID) (*DrawResult, error) {
-	p, err := s.productRepo.GetByID(productID)
+func (s *Service) ExecuteDraw(ctx context.Context, auctionID uuid.UUID, trigger string, actorID uuid.UUID) (*DrawResult, error) {
+	a, err := s.auctionRepo.GetByID(auctionID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Guard: only close/active/postponed products can be drawn
-	switch p.Status {
-	case domain.ProductStatusActive, domain.ProductStatusPostponed, domain.ProductStatusClosed:
+	switch a.Status {
+	case domain.AuctionStatusActive, domain.AuctionStatusPostponed, domain.AuctionStatusClosed:
 		// allowed
-	case domain.ProductStatusExecuted:
-		return nil, domain.NewAppError(409, "Draw has already been executed for this product", nil)
-	case domain.ProductStatusCancelled:
-		return nil, domain.NewAppError(422, "Cannot execute draw on a cancelled product", nil)
+	case domain.AuctionStatusExecuted:
+		return nil, domain.NewAppError(409, "Draw has already been executed for this auction", nil)
+	case domain.AuctionStatusCancelled:
+		return nil, domain.NewAppError(422, "Cannot execute draw on a cancelled auction", nil)
 	default:
-		return nil, domain.NewAppError(422, fmt.Sprintf("Product status %q does not allow draw execution", p.Status), nil)
+		return nil, domain.NewAppError(422, fmt.Sprintf("Auction status %q does not allow draw execution", a.Status), nil)
 	}
 
-	// Transition to "closed" to block new bids immediately
-	if p.Status != domain.ProductStatusClosed {
-		if err := s.productRepo.UpdateStatus(productID, domain.ProductStatusClosed); err != nil {
+	if a.Status != domain.AuctionStatusClosed {
+		if err := s.auctionRepo.UpdateStatus(auctionID, domain.AuctionStatusClosed); err != nil {
 			return nil, err
 		}
 	}
 
-	// Find winning entry (lowest unique bid_value)
-	winningEntry, err := s.bidEntryRepo.FindWinner(productID)
+	winningBid, err := s.bidRepo.FindWinner(auctionID)
 	if err != nil {
 		return nil, fmt.Errorf("draw: find winner: %w", err)
 	}
 
 	result := &DrawResult{}
 
-	if winningEntry == nil {
-		// No unique bid — log and return without executing
-		s.logAudit(actorID, "lub.draw.no_winner",
-			"lub_product", productID.String(),
+	if winningBid == nil {
+		s.logAudit(actorID, "auction.draw.no_winner",
+			"auction", auctionID.String(),
 			fmt.Sprintf("trigger=%s, no unique bid found", trigger))
 		return result, nil
 	}
 
-	// Mark the winner on bid_entries and compute IsUnique flags for all
-	if err := s.bidEntryRepo.MarkWinner(productID, winningEntry.ID); err != nil {
+	if err := s.bidRepo.MarkWinner(auctionID, winningBid.ID); err != nil {
 		return nil, fmt.Errorf("draw: mark winner: %w", err)
 	}
 
-	// Update the product with winner info and status=executed
 	now := time.Now().UTC()
-	p.WinnerID = &winningEntry.ParticipantID
-	p.WinnerBidValue = &winningEntry.BidValue
-	p.ExecutedAt = &now
-	p.Status = domain.ProductStatusExecuted
+	a.WinnerBidID = &winningBid.ID
+	a.WinnerParticipantID = &winningBid.ParticipantID
+	a.WinnerBidValue = &winningBid.BidValue
+	a.ExecutedAt = &now
+	a.Status = domain.AuctionStatusExecuted
 
-	// Fetch participation to get winner name/email/phone
-	if part, err := s.participationRepo.GetByProductAndParticipant(productID, winningEntry.ParticipantID); err == nil && part != nil {
-		p.WinnerName = part.ParticipantName
-		p.WinnerEmail = part.ParticipantEmail
-		p.WinnerPhone = part.ParticipantPhone
-	}
-
-	if err := s.productRepo.Update(p); err != nil {
-		return nil, fmt.Errorf("draw: save product winner: %w", err)
+	if err := s.auctionRepo.Update(a); err != nil {
+		return nil, fmt.Errorf("draw: save auction winner: %w", err)
 	}
 
 	result.HasWinner = true
-	result.WinnerEntryID = winningEntry.ID
-	result.WinnerParticipant = winningEntry.ParticipantID
-	result.WinnerBidValue = winningEntry.BidValue
+	result.WinnerBidID = winningBid.ID
+	result.WinnerParticipant = winningBid.ParticipantID
+	result.WinnerBidValue = winningBid.BidValue
 
-	s.logAudit(actorID, "lub.draw.executed",
-		"lub_product", productID.String(),
+	s.logAudit(actorID, "auction.draw.executed",
+		"auction", auctionID.String(),
 		fmt.Sprintf("trigger=%s winner=%s bid_value=%.2f",
-			trigger, winningEntry.ParticipantID, winningEntry.BidValue.Float64()))
+			trigger, winningBid.ParticipantID, winningBid.BidValue.Float64()))
 
 	return result, nil
 }
 
-// CloseProduct transitions an active/postponed product to "closed" without executing the draw.
-// Useful to stop accepting bids before manually running ExecuteDraw.
-func (s *Service) CloseProduct(ctx context.Context, productID uuid.UUID, actorID uuid.UUID) error {
-	p, err := s.productRepo.GetByID(productID)
+// CloseAuction transitions an active/postponed auction to "closed" without executing the draw.
+func (s *Service) CloseAuction(ctx context.Context, auctionID uuid.UUID, actorID uuid.UUID) error {
+	a, err := s.auctionRepo.GetByID(auctionID)
 	if err != nil {
 		return err
 	}
-	if p.Status != domain.ProductStatusActive && p.Status != domain.ProductStatusPostponed {
-		return domain.NewAppError(422, "Only active or postponed products can be closed", nil)
+	if a.Status != domain.AuctionStatusActive && a.Status != domain.AuctionStatusPostponed {
+		return domain.NewAppError(422, "Only active or postponed auctions can be closed", nil)
 	}
-	if err := s.productRepo.UpdateStatus(productID, domain.ProductStatusClosed); err != nil {
+	if err := s.auctionRepo.UpdateStatus(auctionID, domain.AuctionStatusClosed); err != nil {
 		return err
 	}
-	s.logAudit(actorID, "lub.product.closed", "lub_product", productID.String(), p.Name)
+	s.logAudit(actorID, "auction.closed", "auction", auctionID.String(), a.Title)
 	return nil
 }
 
-// ProcessDueProducts is called by the scheduler to auto-close products whose
-// CloseAt has passed and (optionally) immediately execute the draw.
-func (s *Service) ProcessDueProducts(ctx context.Context) error {
-	products, err := s.productRepo.ListDueForClose()
+// ProcessDueAuctions is called by the scheduler to auto-close auctions whose CloseAt has passed.
+func (s *Service) ProcessDueAuctions(ctx context.Context) error {
+	auctions, err := s.auctionRepo.ListDueForClose()
 	if err != nil {
 		return err
 	}
-	for _, p := range products {
-		pid := p.ID
-		if _, err := s.ExecuteDraw(ctx, pid, "scheduled", uuid.Nil); err != nil {
-			// Log but continue processing other products
-			s.logAudit(uuid.Nil, "lub.draw.auto_error",
-				"lub_product", pid.String(), err.Error())
+	for _, a := range auctions {
+		aid := a.ID
+		if _, err := s.ExecuteDraw(ctx, aid, "scheduled", uuid.Nil); err != nil {
+			s.logAudit(uuid.Nil, "auction.draw.auto_error",
+				"auction", aid.String(), err.Error())
 		}
 	}
 	return nil

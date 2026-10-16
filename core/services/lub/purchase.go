@@ -9,188 +9,174 @@ import (
 	"github.com/google/uuid"
 )
 
-// ---------------------- Product management (admin) ----------------------
+// ---------------------- Auction management (admin) ----------------------
 
-// CreateProduct creates a new LUB product in draft status.
-func (s *Service) CreateProduct(ctx context.Context, p *domain.Product, createdBy uuid.UUID) error {
-	p.Status = domain.ProductStatusDraft
-	p.CreatedBy = createdBy
-	p.PostponeCount = 0
-	if p.MinBidValue.IsZero() {
-		p.MinBidValue = domain.NewMoney(0.01)
+// CreateAuction creates a new auction in draft status.
+func (s *Service) CreateAuction(ctx context.Context, a *domain.Auction, createdBy uuid.UUID) error {
+	a.Status = domain.AuctionStatusDraft
+	a.CreatedBy = createdBy
+	if a.MinBidValue.IsZero() {
+		a.MinBidValue = domain.NewMoney(0.01)
 	}
-	if err := s.productRepo.Create(p); err != nil {
+	if err := s.auctionRepo.Create(a); err != nil {
 		return err
 	}
-	s.logAudit(createdBy, "lub.product.created", "lub_product", p.ID.String(), p.Name)
+	s.logAudit(createdBy, "auction.created", "auction", a.ID.String(), a.Title)
 	return nil
 }
 
-// UpdateProduct updates mutable fields of a product (name, description, fees, dates).
-// Only draft products can be fully edited; active products can only have CloseAt extended (postponed).
-func (s *Service) UpdateProduct(ctx context.Context, id uuid.UUID, updates *domain.Product, actorID uuid.UUID) error {
-	p, err := s.productRepo.GetByID(id)
+// UpdateAuction updates mutable fields of an auction.
+func (s *Service) UpdateAuction(ctx context.Context, id uuid.UUID, updates *domain.Auction, actorID uuid.UUID) error {
+	a, err := s.auctionRepo.GetByID(id)
 	if err != nil {
 		return err
 	}
-	if p.Status == domain.ProductStatusExecuted || p.Status == domain.ProductStatusCancelled {
-		return domain.NewAppError(422, "Cannot edit a product that is already executed or cancelled", nil)
+	if a.Status == domain.AuctionStatusExecuted || a.Status == domain.AuctionStatusCancelled {
+		return domain.NewAppError(422, "Cannot edit an auction that is already executed or cancelled", nil)
 	}
-	// Apply allowed updates
-	if updates.Name != "" {
-		p.Name = updates.Name
+	if updates.Title != "" {
+		a.Title = updates.Title
 	}
 	if updates.Description != "" {
-		p.Description = updates.Description
+		a.Description = updates.Description
 	}
 	if updates.ImageURL != "" {
-		p.ImageURL = updates.ImageURL
+		a.ImageURL = updates.ImageURL
 	}
 	if updates.VideoURL != "" {
-		p.VideoURL = updates.VideoURL
+		a.VideoURL = updates.VideoURL
 	}
-	if updates.EntranceFee.IsPositive() && p.Status == domain.ProductStatusDraft {
-		p.EntranceFee = updates.EntranceFee
+	if updates.EntranceFee.IsPositive() && a.Status == domain.AuctionStatusDraft {
+		a.EntranceFee = updates.EntranceFee
 	}
-	if updates.MinBidValue.IsPositive() && p.Status == domain.ProductStatusDraft {
-		p.MinBidValue = updates.MinBidValue
+	if updates.MinBidValue.IsPositive() && a.Status == domain.AuctionStatusDraft {
+		a.MinBidValue = updates.MinBidValue
 	}
-	if updates.MaxBidValue != nil && p.Status == domain.ProductStatusDraft {
-		p.MaxBidValue = updates.MaxBidValue
+	if updates.MaxBidValue != nil && a.Status == domain.AuctionStatusDraft {
+		a.MaxBidValue = updates.MaxBidValue
 	}
 	if updates.StartAt != nil {
-		p.StartAt = updates.StartAt
+		a.StartAt = updates.StartAt
 	}
 	if updates.CloseAt != nil {
-		p.CloseAt = updates.CloseAt
+		a.CloseAt = updates.CloseAt
 	}
-	if err := s.productRepo.Update(p); err != nil {
+	if err := s.auctionRepo.Update(a); err != nil {
 		return err
 	}
-	s.logAudit(actorID, "lub.product.updated", "lub_product", id.String(), p.Name)
+	s.logAudit(actorID, "auction.updated", "auction", id.String(), a.Title)
 	return nil
 }
 
-// ActivateProduct transitions a product from draft → active.
-func (s *Service) ActivateProduct(ctx context.Context, id uuid.UUID, actorID uuid.UUID) error {
-	p, err := s.productRepo.GetByID(id)
+// ActivateAuction transitions an auction from draft → active.
+func (s *Service) ActivateAuction(ctx context.Context, id uuid.UUID, actorID uuid.UUID) error {
+	a, err := s.auctionRepo.GetByID(id)
 	if err != nil {
 		return err
 	}
-	if p.Status != domain.ProductStatusDraft {
-		return domain.NewAppError(422, "Only draft products can be activated", nil)
+	if a.Status != domain.AuctionStatusDraft {
+		return domain.NewAppError(422, "Only draft auctions can be activated", nil)
 	}
-	if !p.EntranceFee.IsPositive() {
+	if !a.EntranceFee.IsPositive() {
 		return domain.NewAppError(422, "Entrance fee must be set before activating", nil)
 	}
-	if p.CloseAt == nil {
+	if a.CloseAt == nil {
 		return domain.NewAppError(422, "CloseAt must be set before activating", nil)
 	}
-	if err := s.productRepo.UpdateStatus(id, domain.ProductStatusActive); err != nil {
+	if err := s.auctionRepo.UpdateStatus(id, domain.AuctionStatusActive); err != nil {
 		return err
 	}
-	s.logAudit(actorID, "lub.product.activated", "lub_product", id.String(), p.Name)
+	s.logAudit(actorID, "auction.activated", "auction", id.String(), a.Title)
 	return nil
 }
 
-// PostponeProduct extends the CloseAt of an active or postponed product.
-func (s *Service) PostponeProduct(ctx context.Context, id uuid.UUID, newCloseAt time.Time, actorID uuid.UUID) error {
-	p, err := s.productRepo.GetByID(id)
+// PostponeAuction extends the CloseAt of an active or postponed auction.
+func (s *Service) PostponeAuction(ctx context.Context, id uuid.UUID, newCloseAt time.Time, actorID uuid.UUID) error {
+	a, err := s.auctionRepo.GetByID(id)
 	if err != nil {
 		return err
 	}
-	if p.Status != domain.ProductStatusActive && p.Status != domain.ProductStatusPostponed {
-		return domain.NewAppError(422, "Only active or postponed products can be postponed", nil)
+	if a.Status != domain.AuctionStatusActive && a.Status != domain.AuctionStatusPostponed {
+		return domain.NewAppError(422, "Only active or postponed auctions can be postponed", nil)
 	}
 	now := time.Now().UTC()
 	nc := newCloseAt.UTC()
 	if !nc.After(now) {
 		return domain.NewAppError(422, "New close time must be in the future", nil)
 	}
-	if p.CloseAt != nil && !nc.After(*p.CloseAt) {
+	if a.CloseAt != nil && !nc.After(*a.CloseAt) {
 		return domain.NewAppError(422, "New close time must be later than the current close time", nil)
 	}
-	p.CloseAt = &nc
-	p.PostponeCount++
-	pp := now
-	p.PostponedAt = &pp
-	p.Status = domain.ProductStatusPostponed
-	if err := s.productRepo.Update(p); err != nil {
+	a.CloseAt = &nc
+	a.Status = domain.AuctionStatusPostponed
+	if err := s.auctionRepo.Update(a); err != nil {
 		return err
 	}
-	s.logAudit(actorID, "lub.product.postponed", "lub_product", id.String(),
+	s.logAudit(actorID, "auction.postponed", "auction", id.String(),
 		fmt.Sprintf("new_close_at=%s", nc.Format(time.RFC3339)))
 	return nil
 }
 
-// CancelProduct cancels an active/draft product. Admin-only.
-func (s *Service) CancelProduct(ctx context.Context, id uuid.UUID, actorID uuid.UUID) error {
-	p, err := s.productRepo.GetByID(id)
+// CancelAuction cancels an active/draft auction.
+func (s *Service) CancelAuction(ctx context.Context, id uuid.UUID, actorID uuid.UUID) error {
+	a, err := s.auctionRepo.GetByID(id)
 	if err != nil {
 		return err
 	}
-	if p.Status == domain.ProductStatusExecuted {
-		return domain.NewAppError(422, "Cannot cancel an already executed product", nil)
+	if a.Status == domain.AuctionStatusExecuted {
+		return domain.NewAppError(422, "Cannot cancel an already executed auction", nil)
 	}
-	if p.Status == domain.ProductStatusCancelled {
-		return domain.NewAppError(422, "Product is already cancelled", nil)
+	if a.Status == domain.AuctionStatusCancelled {
+		return domain.NewAppError(422, "Auction is already cancelled", nil)
 	}
-	if err := s.productRepo.UpdateStatus(id, domain.ProductStatusCancelled); err != nil {
+	if err := s.auctionRepo.UpdateStatus(id, domain.AuctionStatusCancelled); err != nil {
 		return err
 	}
-	s.logAudit(actorID, "lub.product.cancelled", "lub_product", id.String(), p.Name)
+	s.logAudit(actorID, "auction.cancelled", "auction", id.String(), a.Title)
 	return nil
 }
 
 // ---------------------- Participation (entrance fee) ----------------------
 
 // RecordParticipation records that a participant paid the entrance fee.
-// Idempotent: if a participation already exists for (productID, participantID), returns it.
-// transactionID is the Chapa tx_ref (used for idempotency).
+// Idempotent on transactionID or existing active participation.
 func (s *Service) RecordParticipation(
 	ctx context.Context,
-	productID uuid.UUID,
+	auctionID uuid.UUID,
 	participantID string,
-	participantName, participantEmail, participantPhone string,
 	transactionID string,
 	feePaid domain.Money,
-) (*domain.LUBParticipation, error) {
-	// Idempotency: check existing by tx_ref
+) (*domain.AuctionParticipation, error) {
 	if transactionID != "" {
 		if existing, _ := s.participationRepo.GetByTransactionID(transactionID); existing != nil {
 			return existing, nil
 		}
 	}
 
-	// Check if product is accepting participants
-	p, err := s.productRepo.GetByID(productID)
+	a, err := s.auctionRepo.GetByID(auctionID)
 	if err != nil {
 		return nil, err
 	}
-	if p.Status != domain.ProductStatusActive && p.Status != domain.ProductStatusPostponed {
-		return nil, domain.NewAppError(422, "Product is not currently accepting participants", nil)
+	if a.Status != domain.AuctionStatusActive && a.Status != domain.AuctionStatusPostponed {
+		return nil, domain.NewAppError(422, "Auction is not currently accepting participants", nil)
 	}
-	if time.Now().UTC().After(*p.CloseAt) {
-		return nil, domain.NewAppError(422, "Bidding period has closed for this product", nil)
+	if time.Now().UTC().After(*a.CloseAt) {
+		return nil, domain.NewAppError(422, "Bidding period has closed for this auction", nil)
 	}
 
-	// Check if user already has an active participation
-	if existing, _ := s.participationRepo.GetByProductAndParticipant(productID, participantID); existing != nil {
-		if existing.Status == domain.LUBParticipationStatusActive {
-			return existing, nil // Already participating — idempotent
+	if existing, _ := s.participationRepo.GetByAuctionAndParticipant(auctionID, participantID); existing != nil {
+		if existing.Status == domain.ParticipationStatusActive {
+			return existing, nil
 		}
 	}
 
-	part := &domain.LUBParticipation{
-		ID:               uuid.New(),
-		ProductID:        productID,
-		ParticipantID:    participantID,
-		ParticipantName:  participantName,
-		ParticipantEmail: participantEmail,
-		ParticipantPhone: participantPhone,
-		TransactionID:    transactionID,
-		FeePaid:          feePaid,
-		Status:           domain.LUBParticipationStatusActive,
+	part := &domain.AuctionParticipation{
+		ID:            uuid.New(),
+		AuctionID:     auctionID,
+		ParticipantID: participantID,
+		TransactionID: transactionID,
+		FeePaid:       feePaid,
+		Status:        domain.ParticipationStatusActive,
 	}
 	if err := s.participationRepo.Create(part); err != nil {
 		return nil, err
@@ -200,120 +186,111 @@ func (s *Service) RecordParticipation(
 
 // RefundParticipation marks a participation record as refunded.
 func (s *Service) RefundParticipation(ctx context.Context, participationID uuid.UUID) error {
-	return s.participationRepo.UpdateStatus(participationID, domain.LUBParticipationStatusRefunded)
+	return s.participationRepo.UpdateStatus(participationID, domain.ParticipationStatusRefunded)
 }
 
-// ---------------------- Bid entry management ----------------------
+// ---------------------- Bid management ----------------------
 
-// PlaceBid places a new bid entry for a participant.
-// The participant must have paid the entrance fee first.
-// Returns ErrConflict if the same (product, participant, value) already exists.
+// PlaceBid places a new secret bid for a participant.
 func (s *Service) PlaceBid(
 	ctx context.Context,
-	productID uuid.UUID,
+	auctionID uuid.UUID,
 	participantID string,
 	bidValue domain.Money,
-) (*domain.BidEntry, error) {
-	// Validate product state
-	p, err := s.productRepo.GetByID(productID)
+) (*domain.Bid, error) {
+	a, err := s.auctionRepo.GetByID(auctionID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateBiddingOpen(p); err != nil {
+	if err := s.validateBiddingOpen(a); err != nil {
 		return nil, err
 	}
-	if err := s.validateBidValue(p, bidValue); err != nil {
+	if err := s.validateBidValue(a, bidValue); err != nil {
+		return nil, err
+	}
+	if err := s.requireParticipation(auctionID, participantID); err != nil {
 		return nil, err
 	}
 
-	// Must have paid entrance fee
-	if err := s.requireParticipation(productID, participantID); err != nil {
-		return nil, err
-	}
-
-	entry := &domain.BidEntry{
+	bid := &domain.Bid{
 		ID:            uuid.New(),
-		ProductID:     productID,
+		AuctionID:     auctionID,
 		ParticipantID: participantID,
 		BidValue:      bidValue,
 	}
-	if err := s.bidEntryRepo.Create(entry); err != nil {
+	if err := s.bidRepo.Create(bid); err != nil {
 		return nil, err
 	}
-	return entry, nil
+	return bid, nil
 }
 
-// UpdateBid changes the bid_value on an existing BidEntry.
-// The old (product, participant, value) triple is freed; the new value must not
-// already exist for this (product, participant) pair.
+// UpdateBid changes the bid_value on an existing Bid.
 func (s *Service) UpdateBid(
 	ctx context.Context,
-	entryID uuid.UUID,
+	bidID uuid.UUID,
 	participantID string,
 	newBidValue domain.Money,
-) (*domain.BidEntry, error) {
-	entry, err := s.bidEntryRepo.GetByID(entryID)
+) (*domain.Bid, error) {
+	bid, err := s.bidRepo.GetByID(bidID)
 	if err != nil {
 		return nil, err
 	}
-	if entry.ParticipantID != participantID {
+	if bid.ParticipantID != participantID {
 		return nil, domain.ErrForbidden
 	}
 
-	// Validate product state
-	p, err := s.productRepo.GetByID(entry.ProductID)
+	a, err := s.auctionRepo.GetByID(bid.AuctionID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateBiddingOpen(p); err != nil {
+	if err := s.validateBiddingOpen(a); err != nil {
 		return nil, err
 	}
-	if err := s.validateBidValue(p, newBidValue); err != nil {
+	if err := s.validateBidValue(a, newBidValue); err != nil {
 		return nil, err
 	}
 
-	// Check the new value is not already taken by this participant
-	if existing, _ := s.bidEntryRepo.GetByProductAndParticipantAndValue(entry.ProductID, participantID, newBidValue); existing != nil {
-		if existing.ID != entryID {
-			return nil, domain.NewAppError(409, "You already have a bid entry with that value", nil)
+	if existing, _ := s.bidRepo.GetByAuctionAndParticipantAndValue(bid.AuctionID, participantID, newBidValue); existing != nil {
+		if existing.ID != bidID {
+			return nil, domain.NewAppError(409, "You already have a bid with that value", nil)
 		}
 	}
 
-	entry.BidValue = newBidValue
-	if err := s.bidEntryRepo.Update(entry); err != nil {
+	bid.BidValue = newBidValue
+	if err := s.bidRepo.Update(bid); err != nil {
 		return nil, err
 	}
-	return entry, nil
+	return bid, nil
 }
 
 // ---------------------- Helpers ----------------------
 
-func (s *Service) validateBiddingOpen(p *domain.Product) error {
-	if p.Status != domain.ProductStatusActive && p.Status != domain.ProductStatusPostponed {
-		return domain.NewAppError(422, "This product is not currently accepting bids", nil)
+func (s *Service) validateBiddingOpen(a *domain.Auction) error {
+	if a.Status != domain.AuctionStatusActive && a.Status != domain.AuctionStatusPostponed {
+		return domain.NewAppError(422, "This auction is not currently accepting bids", nil)
 	}
-	if p.CloseAt != nil && time.Now().UTC().After(*p.CloseAt) {
-		return domain.NewAppError(422, "The bidding period for this product has closed", nil)
-	}
-	return nil
-}
-
-func (s *Service) validateBidValue(p *domain.Product, v domain.Money) error {
-	if v.LessThan(p.MinBidValue) {
-		return domain.NewAppError(422, fmt.Sprintf("Bid value must be at least %.2f", p.MinBidValue.Float64()), nil)
-	}
-	if p.MaxBidValue != nil && p.MaxBidValue.LessThan(v) {
-		return domain.NewAppError(422, fmt.Sprintf("Bid value must not exceed %.2f", p.MaxBidValue.Float64()), nil)
+	if a.CloseAt != nil && time.Now().UTC().After(*a.CloseAt) {
+		return domain.NewAppError(422, "The bidding period for this auction has closed", nil)
 	}
 	return nil
 }
 
-func (s *Service) requireParticipation(productID uuid.UUID, participantID string) error {
-	part, err := s.participationRepo.GetByProductAndParticipant(productID, participantID)
+func (s *Service) validateBidValue(a *domain.Auction, v domain.Money) error {
+	if v.LessThan(a.MinBidValue) {
+		return domain.NewAppError(422, fmt.Sprintf("Bid value must be at least %.2f", a.MinBidValue.Float64()), nil)
+	}
+	if a.MaxBidValue != nil && a.MaxBidValue.LessThan(v) {
+		return domain.NewAppError(422, fmt.Sprintf("Bid value must not exceed %.2f", a.MaxBidValue.Float64()), nil)
+	}
+	return nil
+}
+
+func (s *Service) requireParticipation(auctionID uuid.UUID, participantID string) error {
+	part, err := s.participationRepo.GetByAuctionAndParticipant(auctionID, participantID)
 	if err != nil {
 		return err
 	}
-	if part == nil || part.Status != domain.LUBParticipationStatusActive {
+	if part == nil || part.Status != domain.ParticipationStatusActive {
 		return domain.NewAppError(402, "You must pay the entrance fee before placing a bid", nil)
 	}
 	return nil

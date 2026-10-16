@@ -27,9 +27,9 @@ func NewStack(t testing.TB, pg *PG) *Stack {
 
 	userRepo := postgres.NewUserRepository(db)
 	participantUserRepo := postgres.NewParticipantUserRepository(db)
-	lubProductRepo := postgres.NewLUBProductRepository(db)
-	lubParticipationRepo := postgres.NewLUBParticipationRepository(db)
-	lubBidEntryRepo := postgres.NewLUBBidEntryRepository(db)
+	auctionRepo := postgres.NewAuctionRepository(db)
+	participationRepo := postgres.NewAuctionParticipationRepository(db)
+	bidRepo := postgres.NewBidRepository(db)
 	notificationRepo := postgres.NewNotificationRepository(db)
 	paymentLedgerRepo := postgres.NewPaymentLedgerRepository(db)
 	auditRepo := postgres.NewAuditLogRepository(db)
@@ -38,9 +38,9 @@ func NewStack(t testing.TB, pg *PG) *Stack {
 	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, nil, nil, nil, nil)
 
 	lubSvc := lub.NewService(
-		lubProductRepo,
-		lubParticipationRepo,
-		lubBidEntryRepo,
+		auctionRepo,
+		participationRepo,
+		bidRepo,
 		auditSvc,
 		notifSvc,
 	)

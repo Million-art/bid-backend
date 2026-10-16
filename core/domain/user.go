@@ -23,20 +23,19 @@ const (
 )
 
 type User struct {
-	ID       uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	FullName string    `gorm:"not null" json:"fullName"`
-	Email    string    `gorm:"uniqueIndex;not null" json:"email"`
-	Password string    `gorm:"column:password_hash;not null" json:"-"` // Never return password
-	Phone    string    `json:"phone"`
+	ID       uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	FullName string    `gorm:"type:varchar(255);not null"                     json:"fullName"`
+	Email    string    `gorm:"type:varchar(255);uniqueIndex:ux_users_email;not null" json:"email"`
+	Password string    `gorm:"column:password_hash;not null"                  json:"-"`
+	Phone    string    `gorm:"type:varchar(50);index:idx_users_phone"         json:"phone"`
 
-	TelegramID       *int64   `gorm:"uniqueIndex" json:"telegramId,omitempty"`
-	TelegramUsername string   `gorm:"type:varchar(100)" json:"telegramUsername,omitempty"`
-	JoinedVia        string   `gorm:"type:varchar(30);default:'web'" json:"joinedVia"`
+	TelegramID       *int64 `gorm:"uniqueIndex:ux_users_telegram_id"          json:"telegramId,omitempty"`
+	TelegramUsername string `gorm:"type:varchar(100);index:idx_users_tg_user" json:"telegramUsername,omitempty"`
+	JoinedVia        string `gorm:"type:varchar(30);default:'web'"            json:"joinedVia"`
 
-	Role      UserRole       `gorm:"type:varchar(20);not null" json:"role"`
-	Status    UserStatus     `gorm:"type:varchar(20);default:'active'" json:"status"`
+	Role      UserRole       `gorm:"type:varchar(20);not null;index:idx_users_role_status,priority:1" json:"role"`
+	Status    UserStatus     `gorm:"type:varchar(20);default:'active';index:idx_users_role_status,priority:2" json:"status"`
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-
-	}
+}

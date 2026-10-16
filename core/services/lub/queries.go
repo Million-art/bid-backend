@@ -5,57 +5,48 @@ import (
 	"github.com/google/uuid"
 )
 
-// ---------------------- Product queries ----------------------
+// ---------------------- Auction queries ----------------------
 
-// GetProductByID returns a product by ID.
-func (s *Service) GetProductByID(id uuid.UUID) (*domain.Product, error) {
-	return s.productRepo.GetByID(id)
+func (s *Service) GetAuctionByID(id uuid.UUID) (*domain.Auction, error) {
+	return s.auctionRepo.GetByID(id)
 }
 
-// ListProducts returns a paginated list of all products (admin).
-func (s *Service) ListProducts(status, search string, page, limit int) ([]domain.Product, int64, error) {
+func (s *Service) ListAuctions(status, search string, page, limit int) ([]domain.Auction, int64, error) {
 	offset := (page - 1) * limit
-	return s.productRepo.List(status, search, limit, offset)
+	return s.auctionRepo.List(status, search, limit, offset)
 }
 
-// ListPublicProducts returns products visible to participants.
-func (s *Service) ListPublicProducts(page, limit int) ([]domain.Product, int64, error) {
+func (s *Service) ListPublicAuctions(page, limit int) ([]domain.Auction, int64, error) {
 	offset := (page - 1) * limit
-	return s.productRepo.ListPublic(limit, offset)
+	return s.auctionRepo.ListPublic(limit, offset)
 }
 
 // ---------------------- Participation queries ----------------------
 
-// GetParticipation returns the participation record for a user on a product.
-func (s *Service) GetParticipation(productID uuid.UUID, participantID string) (*domain.LUBParticipation, error) {
-	return s.participationRepo.GetByProductAndParticipant(productID, participantID)
+func (s *Service) GetParticipation(auctionID uuid.UUID, participantID string) (*domain.AuctionParticipation, error) {
+	return s.participationRepo.GetByAuctionAndParticipant(auctionID, participantID)
 }
 
-// ListParticipations returns all participants for a product (admin overview).
-func (s *Service) ListParticipations(productID uuid.UUID, page, limit int) ([]domain.LUBParticipation, int64, error) {
+func (s *Service) ListParticipations(auctionID uuid.UUID, page, limit int) ([]domain.AuctionParticipation, int64, error) {
 	offset := (page - 1) * limit
-	return s.participationRepo.ListByProduct(productID, limit, offset)
+	return s.participationRepo.ListByAuction(auctionID, limit, offset)
 }
 
-// CountParticipants returns the number of participants for a product.
-func (s *Service) CountParticipants(productID uuid.UUID) (int64, error) {
-	return s.participationRepo.CountByProduct(productID)
+func (s *Service) CountParticipants(auctionID uuid.UUID) (int64, error) {
+	return s.participationRepo.CountByAuction(auctionID)
 }
 
-// ---------------------- Bid entry queries ----------------------
+// ---------------------- Bid queries ----------------------
 
-// GetBidEntry returns a single bid entry by ID.
-func (s *Service) GetBidEntry(id uuid.UUID) (*domain.BidEntry, error) {
-	return s.bidEntryRepo.GetByID(id)
+func (s *Service) GetBid(id uuid.UUID) (*domain.Bid, error) {
+	return s.bidRepo.GetByID(id)
 }
 
-// ListMyBids returns all bid entries a participant has placed on a product.
-func (s *Service) ListMyBids(productID uuid.UUID, participantID string) ([]domain.BidEntry, error) {
-	return s.bidEntryRepo.ListByProductAndParticipant(productID, participantID)
+func (s *Service) ListMyBids(auctionID uuid.UUID, participantID string) ([]domain.Bid, error) {
+	return s.bidRepo.ListByAuctionAndParticipant(auctionID, participantID)
 }
 
-// ListProductBidEntries returns all bid entries for a product (admin).
-func (s *Service) ListProductBidEntries(productID uuid.UUID, page, limit int) ([]domain.BidEntry, int64, error) {
+func (s *Service) ListAuctionBids(auctionID uuid.UUID, page, limit int) ([]domain.Bid, int64, error) {
 	offset := (page - 1) * limit
-	return s.bidEntryRepo.ListByProduct(productID, limit, offset)
+	return s.bidRepo.ListByAuction(auctionID, limit, offset)
 }

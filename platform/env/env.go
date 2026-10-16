@@ -12,7 +12,6 @@ import (
 
 type Config struct {
 	AppPort          string
-	AdminAppURL      string // base URL for admin frontend (set-password, reset-password, dashboard links in emails)
 	CORSOrigins      string // comma-separated origins for CORS
 	DatabaseURL      string
 	DBSSLMode        string
@@ -39,8 +38,6 @@ type Config struct {
 	CookieSecure                     bool
 	CookieSameSite                   string
 	CookieDomain                     string
-	ClientSecret                     string
-	ClientBackendInternalURL         string
 	AppName                          string
 	SupportEmail                     string
 	ExposeDebugMetrics               bool
@@ -95,9 +92,6 @@ func (c *Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DB_URL is required")
 	}
-	if c.ClientSecret == "" {
-		return fmt.Errorf("CLIENT_SECRET is required for communication with client-backend")
-	}
 	return nil
 }
 
@@ -126,7 +120,6 @@ func LoadConfig() *Config {
 
 	return &Config{
 		AppPort:                          sanitizePort(getEnv("APP_PORT", "8080")),
-		AdminAppURL:                      getEnv("ADMIN_APP_URL", "http://localhost:5173"),
 		CORSOrigins:                      getEnv("CORS_ORIGINS", ""),
 		DatabaseURL:                      requireEnv("DB_URL"),
 		DBSSLMode:                        getEnv("DB_SSLMODE", "require"),
@@ -152,8 +145,6 @@ func LoadConfig() *Config {
 		CookieSecure:                     getEnvBool("COOKIE_SECURE", false),
 		CookieSameSite:                   getEnv("COOKIE_SAME_SITE", "Lax"),
 		CookieDomain:                     getEnv("COOKIE_DOMAIN", "localhost"),
-		ClientSecret:                     getEnv("CLIENT_SECRET", "internal-secret"),
-		ClientBackendInternalURL:         getEnv("CLIENT_BACKEND_INTERNAL_URL", ""),
 		AppName:                          getEnv("APP_NAME", "Carra Market"),
 		SupportEmail:                     getEnv("SUPPORT_EMAIL", "support@carramarket.com"),
 		ExposeDebugMetrics:               getEnvBool("EXPOSE_DEBUG_METRICS", false),

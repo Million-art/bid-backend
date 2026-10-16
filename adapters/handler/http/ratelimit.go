@@ -26,22 +26,3 @@ func AuthRateLimit(storage fiber.Storage) fiber.Handler {
 		Storage: storage,
 	})
 }
-
-// PurchaseRateLimit middleware limits ticket purchase endpoint.
-func PurchaseRateLimit(storage fiber.Storage) fiber.Handler {
-	return limiter.New(limiter.Config{
-		Max:        30,
-		Expiration: 1 * time.Minute,
-		KeyGenerator: func(c fiber.Ctx) string {
-			key := c.IP()
-			if key == "" {
-				key = c.Get("X-Forwarded-For", "unknown")
-			}
-			return "limit:purchase:" + key
-		},
-		LimitReached: func(c fiber.Ctx) error {
-			return apiresponse.Fail(c, fiber.StatusTooManyRequests, "Too many purchase attempts. Please try again later.", "TOO_MANY_REQUESTS", nil)
-		},
-		Storage: storage,
-	})
-}

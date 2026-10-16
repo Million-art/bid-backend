@@ -11,20 +11,17 @@ import (
 	"github.com/google/uuid"
 )
 
-func SeedParticipant(t testing.TB, pg *PG, availableBalance domain.Money) uuid.UUID {
+func SeedParticipant(t testing.TB, pg *PG, _ domain.Money) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	user := &domain.ParticipantUser{
-		ID:               id.String(),
-		Email:            fmt.Sprintf("user-%s@test.local", id.String()[:8]),
-		FullName:         "Test Participant",
-		Phone:            "+251922000000",
-		AvailableBalance: availableBalance,
-		PendingBalance:   domain.Zero(),
-		AuthProvider:     "password",
-		Status:           "active",
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
+		ID:        id.String(),
+		Email:     fmt.Sprintf("user-%s@test.local", id.String()[:8]),
+		FullName:  "Test Participant",
+		Phone:     "+251922000000",
+		Status:    "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := pg.DB.Create(user).Error; err != nil {
 		t.Fatalf("SeedParticipant: %v", err)
@@ -32,18 +29,18 @@ func SeedParticipant(t testing.TB, pg *PG, availableBalance domain.Money) uuid.U
 	return id
 }
 
-type ProductOpts struct {
-	Status      domain.ProductStatus
+type AuctionOpts struct {
+	Status      domain.AuctionStatus
 	EntranceFee domain.Money
 	MinBidValue domain.Money
 	MaxBidValue *domain.Money
 	StartInPast bool
 }
 
-func SeedLUBProduct(t testing.TB, pg *PG, opts ProductOpts) *domain.Product {
+func SeedAuction(t testing.TB, pg *PG, opts AuctionOpts) *domain.Auction {
 	t.Helper()
 	if opts.Status == "" {
-		opts.Status = domain.ProductStatusDraft
+		opts.Status = domain.AuctionStatusDraft
 	}
 	if opts.EntranceFee.IsZero() {
 		opts.EntranceFee = domain.NewMoney(10)
@@ -57,9 +54,9 @@ func SeedLUBProduct(t testing.TB, pg *PG, opts ProductOpts) *domain.Product {
 		t0 := time.Now().UTC().Add(-time.Hour)
 		start = &t0
 	}
-	r := &domain.Product{
+	a := &domain.Auction{
 		ID:          uuid.New(),
-		Name:        "Test Auction " + uuid.New().String()[:6],
+		Title:       "Test Auction " + uuid.New().String()[:6],
 		Description: "Integration test auction",
 		Status:      opts.Status,
 		EntranceFee: opts.EntranceFee,
@@ -69,38 +66,38 @@ func SeedLUBProduct(t testing.TB, pg *PG, opts ProductOpts) *domain.Product {
 		CloseAt:     &closeAt,
 		CreatedBy:   uuid.New(),
 	}
-	if err := pg.DB.Create(r).Error; err != nil {
-		t.Fatalf("SeedLUBProduct: %v", err)
+	if err := pg.DB.Create(a).Error; err != nil {
+		t.Fatalf("SeedAuction: %v", err)
 	}
-	return r
+	return a
 }
 
-func SeedLUBParticipation(t testing.TB, pg *PG, productID, userID uuid.UUID) *domain.LUBParticipation {
+func SeedAuctionParticipation(t testing.TB, pg *PG, auctionID, userID uuid.UUID) *domain.AuctionParticipation {
 	t.Helper()
-	p := &domain.LUBParticipation{
+	p := &domain.AuctionParticipation{
 		ID:            uuid.New(),
-		ProductID:     productID,
+		AuctionID:     auctionID,
 		ParticipantID: userID.String(),
-		Status:        domain.LUBParticipationStatusActive,
+		Status:        domain.ParticipationStatusActive,
 		TransactionID: "TX-" + uuid.New().String(),
 		FeePaid:       domain.NewMoney(10),
 	}
 	if err := pg.DB.Create(p).Error; err != nil {
-		t.Fatalf("SeedLUBParticipation: %v", err)
+		t.Fatalf("SeedAuctionParticipation: %v", err)
 	}
 	return p
 }
 
-func SeedLUBBidEntry(t testing.TB, pg *PG, productID uuid.UUID, participantID string, amount domain.Money) *domain.BidEntry {
+func SeedBid(t testing.TB, pg *PG, auctionID uuid.UUID, participantID string, amount domain.Money) *domain.Bid {
 	t.Helper()
-	b := &domain.BidEntry{
+	b := &domain.Bid{
 		ID:            uuid.New(),
-		ProductID:     productID,
+		AuctionID:     auctionID,
 		ParticipantID: participantID,
 		BidValue:      amount,
 	}
 	if err := pg.DB.Create(b).Error; err != nil {
-		t.Fatalf("SeedLUBBidEntry: %v", err)
+		t.Fatalf("SeedBid: %v", err)
 	}
 	return b
 }

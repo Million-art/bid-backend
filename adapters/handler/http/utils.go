@@ -2,29 +2,12 @@ package http
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
-
-// ParseQueryInt is deprecated; use validate.BindPagination or validate.BindLimit instead.
-func ParseQueryInt(c fiber.Ctx, key string, defaultVal, min, max int) int {
-	s := c.Query(key, strconv.Itoa(defaultVal))
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return defaultVal
-	}
-	if n < min {
-		return min
-	}
-	if n > max {
-		return max
-	}
-	return n
-}
 
 // GetUserID safely extracts userID from auth middleware Locals. Returns empty string if missing or invalid.
 func GetUserID(c fiber.Ctx) string {

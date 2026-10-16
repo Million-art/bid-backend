@@ -1,0 +1,207 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "contact": {}
+    },
+    "paths": {
+        "/api/auth/forgot-password": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Forgot password",
+                "parameters": [
+                    {
+                        "description": "Forgot",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.ForgotPasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {}
+            }
+        },
+        "/api/auth/login": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Login",
+                "parameters": [
+                    {
+                        "description": "Login",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.LoginRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/logout": {
+            "post": {
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Logout",
+                "responses": {}
+            }
+        },
+        "/api/auth/refresh": {
+            "post": {
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Refresh token",
+                "responses": {}
+            }
+        },
+        "/api/auth/reset-password-otp": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Reset password OTP",
+                "parameters": [
+                    {
+                        "description": "ResetOTP",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.ResetPasswordOTPRequest"
+                        }
+                    }
+                ],
+                "responses": {}
+            }
+        },
+        "/api/auth/set-password": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Set password",
+                "parameters": [
+                    {
+                        "description": "SetPassword",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/http.SetPasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {}
+            }
+        }
+    },
+    "definitions": {
+        "http.ForgotPasswordRequest": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "identifier": {
+                    "type": "string"
+                }
+            }
+        },
+        "http.LoginRequest": {
+            "type": "object",
+            "required": [
+                "password"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "loginIdentifier": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string",
+                    "minLength": 1
+                }
+            }
+        },
+        "http.ResetPasswordOTPRequest": {
+            "type": "object",
+            "required": [
+                "identifier",
+                "newPassword",
+                "otp"
+            ],
+            "properties": {
+                "identifier": {
+                    "type": "string"
+                },
+                "newPassword": {
+                    "type": "string",
+                    "minLength": 8
+                },
+                "otp": {
+                    "type": "string",
+                    "maxLength": 6,
+                    "minLength": 6
+                }
+            }
+        },
+        "http.SetPasswordRequest": {
+            "type": "object",
+            "required": [
+                "password",
+                "token"
+            ],
+            "properties": {
+                "password": {
+                    "type": "string",
+                    "minLength": 4
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

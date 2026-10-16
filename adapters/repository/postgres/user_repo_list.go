@@ -45,7 +45,7 @@ func (r *UserRepo) listQuery(base *gorm.DB, page, limit int) ([]domain.User, int
 		return nil, 0, err
 	}
 
-	err := base.Preload("AgentProfile").
+	err := base.
 		Limit(limit).Offset(offset).
 		Order("created_at desc").
 		Find(&users).Error

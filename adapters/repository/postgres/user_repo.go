@@ -24,8 +24,7 @@ func (r *UserRepo) Create(user *domain.User) error {
 
 func (r *UserRepo) GetByID(id uuid.UUID) (*domain.User, error) {
 	var user domain.User
-	// Preload AgentProfile if it exists
-	if err := r.db.Preload("AgentProfile").Take(&user, "id = ?", id).Error; err != nil {
+	if err := r.db.Take(&user, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound
 		}
@@ -36,7 +35,7 @@ func (r *UserRepo) GetByID(id uuid.UUID) (*domain.User, error) {
 
 func (r *UserRepo) GetByEmail(email string) (*domain.User, error) {
 	var user domain.User
-	if err := r.db.Preload("AgentProfile").Take(&user, "email = ?", email).Error; err != nil {
+	if err := r.db.Take(&user, "email = ?", email).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound
 		}
@@ -64,7 +63,7 @@ func (r *UserRepo) GetByPhone(phone string) (*domain.User, error) {
 		localFormat = "0" + digits[3:]
 	}
 
-	if err := r.db.Preload("AgentProfile").Where("phone = ? OR phone = ? OR phone = ? OR phone = ?", clean, withPlus, withoutPlus, localFormat).Take(&user).Error; err != nil {
+	if err := r.db.Where("phone = ? OR phone = ? OR phone = ? OR phone = ?", clean, withPlus, withoutPlus, localFormat).Take(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound
 		}
@@ -79,7 +78,7 @@ func (r *UserRepo) GetByTelegramUsername(username string) (*domain.User, error) 
 	if clean == "" {
 		return nil, domain.ErrNotFound
 	}
-	if err := r.db.Preload("AgentProfile").Where("LOWER(telegram_username) = LOWER(?)", clean).Take(&user).Error; err != nil {
+	if err := r.db.Where("LOWER(telegram_username) = LOWER(?)", clean).Take(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound
 		}
@@ -93,7 +92,7 @@ func (r *UserRepo) GetByTelegramID(tgID int64) (*domain.User, error) {
 	if tgID <= 0 {
 		return nil, domain.ErrNotFound
 	}
-	if err := r.db.Preload("AgentProfile").Where("telegram_id = ?", tgID).Take(&user).Error; err != nil {
+	if err := r.db.Where("telegram_id = ?", tgID).Take(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound
 		}
@@ -104,7 +103,7 @@ func (r *UserRepo) GetByTelegramID(tgID int64) (*domain.User, error) {
 
 func (r *UserRepo) GetByEmailIncludeDeleted(email string) (*domain.User, error) {
 	var user domain.User
-	if err := r.db.Unscoped().Preload("AgentProfile").Take(&user, "email = ?", email).Error; err != nil {
+	if err := r.db.Unscoped().Take(&user, "email = ?", email).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrNotFound
 		}

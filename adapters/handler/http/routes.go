@@ -27,7 +27,6 @@ import (
 func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cfg *env.Config) error {
 	api := app.Group("/api", CSRF(cfg))
 
-	// 0. Global Rate Limiter (shared via Redis if available, in-memory fallback)
 	var limiterStorage fiber.Storage
 	limiterConfig := limiter.Config{
 		Max:        1000,
@@ -58,7 +57,6 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 		return err
 	}
 	metricsProvider := NewPrometheusMetrics()
-	// Prefer CHAPA_API_URL when provided (matches client-backend env naming)
 	baseURL := cfg.ChapaBaseURL
 	if strings.TrimSpace(cfg.ChapaAPIURL) != "" {
 		baseURL = strings.TrimSpace(cfg.ChapaAPIURL)
@@ -68,27 +66,25 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	refundRepo := postgres.NewRefundRecordRepository(db)
 	legalDocRepo := postgres.NewLegalDocumentRepository(db)
 
-	// Use Prometheus middleware for HTTP metrics
 	app.Use(metricsProvider.RequestMetrics())
 	app.Get("/metrics", PrometheusHandler)
 
-	// 1. Initialize Core Services
 	smsService := sms.NewAfroMessageService(cfg)
 	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, cacheRepo, nil, emailService, smsService)
 
-	// LUB (Lowest Unique Bid) setup
-	lubProductRepo := postgres.NewLUBProductRepository(db)
-	lubParticipationRepo := postgres.NewLUBParticipationRepository(db)
-	lubBidEntryRepo := postgres.NewLUBBidEntryRepository(db)
-	lubService := lub.NewService(lubProductRepo, lubParticipationRepo, lubBidEntryRepo, auditService, notificationService)
-	lubProductHandler := NewLUBProductHandler(lubService)
-	lubHandler := NewLUBHandler(lubService)
+	// Auction (Lowest Unique Bid) setup
+	auctionRepo := postgres.NewAuctionRepository(db)
+	participationRepo := postgres.NewAuctionParticipationRepository(db)
+	bidRepo := postgres.NewBidRepository(db)
+	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService)
+	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
+	auctionHandler := NewAuctionHandler(auctionService)
 
 	authService := services.NewAuthService(userRepo, auditService, emailService, cacheRepo, smsService, cfg)
 	userService := services.NewUserService(userRepo, auditService, emailService, authService, cfg)
-	_ = chapapayment.NewService(paymentLedgerRepo, lubService, participantUserRepo, notificationService, slog.Default())
-	paymentLedgerSvc := paymentledger.NewService(paymentLedgerRepo, refundRepo, chapaClient, lubService, auditService)
-	dashboardService := services.NewDashboardService(userRepo, lubProductRepo, participantUserRepo, auditRepo)
+	_ = chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
+	paymentLedgerSvc := paymentledger.NewService(paymentLedgerRepo, refundRepo, chapaClient, auctionService, auditService)
+	dashboardService := services.NewDashboardService(userRepo, auctionRepo, participantUserRepo, auditRepo)
 	legalDocService := services.NewLegalDocumentService(legalDocRepo, notificationService)
 
 	// Handlers
@@ -107,7 +103,6 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	}
 	mediaPresignHandler := NewMediaPresignHandler(r2PresignService, cfg.MaxUploadSizeMB)
 
-	// Register Categorized Routing Modules
 	registerPublicRoutes(api, legalDocHandler, limiterStorage, cfg)
 	registerAuthRoutes(api, authHandler, limiterStorage)
 
@@ -115,7 +110,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 
 	registerUserRoutes(protected, userHandler, participantHandler)
 	registerPaymentRoutes(protected, paymentHandler)
-	registerLUBRoutes(api, protected, lubProductHandler, lubHandler, cfg)
+	registerAuctionRoutes(api, protected, auctionAdminHandler, auctionHandler, cfg)
 	registerMiscRoutes(protected, dashboardHandler, mediaPresignHandler, notificationHandler, legalDocHandler)
 
 	return nil
@@ -133,8 +128,8 @@ func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStora
 	auth.Post("/logout", authHandler.Logout)
 	auth.Post("/set-password", authHandler.SetPassword)
 	auth.Post("/forgot-password", authHandler.ForgotPassword)
-	auth.Post("/reset-password", authHandler.SetPassword)          // Email link reset (token-based)
-	auth.Post("/reset-password-otp", authHandler.ResetPasswordOTP) // Phone reset (OTP-based)
+	auth.Post("/reset-password", authHandler.SetPassword)
+	auth.Post("/reset-password-otp", authHandler.ResetPasswordOTP)
 }
 
 func registerUserRoutes(protected fiber.Router, userHandler *UserHandler, participantHandler *ParticipantHandler) {
@@ -174,71 +169,27 @@ func registerMiscRoutes(protected fiber.Router, dashboardHandler *DashboardHandl
 	notifications.Patch("/read-all", notificationHandler.MarkAllAsRead)
 }
 
-// registerLUBRoutes wires up all LUB (Lowest Unique Bid) endpoints.
-//
-// Public (no auth):
-//   GET  /api/public/lub-products            — list active products
-//   GET  /api/public/lub-products/:id        — get one product
-//
-// Client-backend service-to-service (X-Client-Secret header):
-//   POST /api/public/lub-products/:productId/participate  — record entrance fee payment
-//   POST /api/public/lub-bids                             — place a bid entry
-//   PATCH /api/public/lub-bids/:id                        — update a bid entry's value
-//   GET  /api/public/lub-products/:productId/my-bids      — list participant's bids
-//   GET  /api/public/lub-products/:productId/my-participation — check participation
-//
-// Admin (JWT auth, admin/super_admin role):
-//   GET    /api/lub-products
-//   POST   /api/lub-products
-//   GET    /api/lub-products/:id
-//   PATCH  /api/lub-products/:id
-//   POST   /api/lub-products/:id/activate
-//   POST   /api/lub-products/:id/postpone
-//   POST   /api/lub-products/:id/close
-//   POST   /api/lub-products/:id/cancel
-//   POST   /api/lub-products/:id/execute-draw
-//   GET    /api/lub-products/:id/participants
-//   GET    /api/lub-products/:id/bid-entries
-func registerLUBRoutes(api fiber.Router, protected fiber.Router, productHandler *LUBProductHandler, lubHandler *LUBHandler, cfg *env.Config) {
-	// --- Public routes (no auth) ---
-	api.Get("/public/lub-products", lubHandler.ListPublicProducts)
-	api.Get("/public/lub-products/:id", lubHandler.GetPublicProduct)
+func registerAuctionRoutes(api fiber.Router, protected fiber.Router, adminHandler *AuctionAdminHandler, publicHandler *AuctionHandler, cfg *env.Config) {
+	// Public routes
+	api.Get("/public/auctions", publicHandler.ListPublicAuctions)
+	api.Get("/public/auctions/:id", publicHandler.GetPublicAuction)
+	api.Post("/public/auctions/:auctionId/participate", publicHandler.RecordParticipation)
+	api.Post("/public/bids", publicHandler.PlaceBid)
+	api.Patch("/public/bids/:id", publicHandler.UpdateBid)
+	api.Get("/public/auctions/:auctionId/my-bids", publicHandler.GetMyBids)
+	api.Get("/public/auctions/:auctionId/my-participation", publicHandler.GetMyParticipation)
 
-	// --- Client-backend service-to-service routes (CSRF-exempt, protected by shared secret) ---
-	clientSecret := ClientSecretMiddleware(cfg.ClientSecret)
-
-	api.Post("/public/lub-products/:productId/participate",
-		clientSecret,
-		lubHandler.RecordParticipation,
-	)
-	api.Post("/public/lub-bids",
-		clientSecret,
-		lubHandler.PlaceBid,
-	)
-	api.Patch("/public/lub-bids/:id",
-		clientSecret,
-		lubHandler.UpdateBid,
-	)
-	api.Get("/public/lub-products/:productId/my-bids",
-		clientSecret,
-		lubHandler.GetMyBids,
-	)
-	api.Get("/public/lub-products/:productId/my-participation",
-		clientSecret,
-		lubHandler.GetMyParticipation,
-	)
-
-	// --- Admin routes (JWT authenticated) ---
-	protected.Get("/lub-products", productHandler.List)
-	lubProducts := protected.Group("/lub-products")
-	lubProducts.Post("/", productHandler.Create)
-	lubProducts.Get("/:id", productHandler.GetByID)
-	lubProducts.Patch("/:id", productHandler.Update)
-	lubProducts.Post("/:id/activate", productHandler.Activate)
-	lubProducts.Post("/:id/postpone", productHandler.Postpone)
-	lubProducts.Post("/:id/close", productHandler.Close)
-	lubProducts.Post("/:id/cancel", productHandler.Cancel)
-	lubProducts.Post("/:id/execute-draw", productHandler.ExecuteDraw)
-	lubProducts.Get("/:id/participants", productHandler.ListParticipants)
-	lubProducts.Get("/:id/bid-entries", productHandler.ListBidEntries)
+	// Admin routes
+	protected.Get("/auctions", adminHandler.List)
+	auctions := protected.Group("/auctions")
+	auctions.Post("/", adminHandler.Create)
+	auctions.Get("/:id", adminHandler.GetByID)
+	auctions.Patch("/:id", adminHandler.Update)
+	auctions.Post("/:id/activate", adminHandler.Activate)
+	auctions.Post("/:id/postpone", adminHandler.Postpone)
+	auctions.Post("/:id/close", adminHandler.Close)
+	auctions.Post("/:id/cancel", adminHandler.Cancel)
+	auctions.Post("/:id/execute-draw", adminHandler.ExecuteDraw)
+	auctions.Get("/:id/participants", adminHandler.ListParticipants)
+	auctions.Get("/:id/bids", adminHandler.ListBids)
 }

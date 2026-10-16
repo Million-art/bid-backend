@@ -6,16 +6,14 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("resource not found")
-	ErrInvalidInput        = errors.New("invalid input")
-	ErrInternalServer      = errors.New("internal server error")
-	ErrUnauthorized        = errors.New("unauthorized")
-	ErrForbidden           = errors.New("forbidden")
-	ErrConflict            = errors.New("resource already exists")
-	ErrEmailConflict       = NewAppError(409, "በዚህ ኢሜይል አድራሻ የተመዘገበ ተጠቃሚ አለ", ErrConflict)
-	ErrPhoneConflict       = NewAppError(409, "በዚህ ስልክ ቁጥር የተመዘገበ ተጠቃሚ አለ", ErrConflict)
-	ErrInsufficientTickets = errors.New("not enough tickets available")
-	ErrInsufficientBalance = errors.New("insufficient balance")
+	ErrNotFound      = errors.New("resource not found")
+	ErrInvalidInput  = errors.New("invalid input")
+	ErrInternalServer = errors.New("internal server error")
+	ErrUnauthorized  = errors.New("unauthorized")
+	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("resource already exists")
+	ErrEmailConflict = NewAppError(409, "በዚህ ኢሜይል አድራሻ የተመዘገበ ተጠቃሚ አለ", ErrConflict)
+	ErrPhoneConflict = NewAppError(409, "በዚህ ስልክ ቁጥር የተመዘገበ ተጠቃሚ አለ", ErrConflict)
 )
 
 type AppError struct {
@@ -71,10 +69,6 @@ func MapDomainErrorToHTTP(err error) (int, string) {
 		return 403, "FORBIDDEN"
 	case errors.Is(err, ErrConflict):
 		return 409, "CONFLICT"
-	case errors.Is(err, ErrInsufficientTickets):
-		return 400, "INSUFFICIENT_TICKETS"
-	case errors.Is(err, ErrInsufficientBalance):
-		return 400, "INSUFFICIENT_BALANCE"
 	case errors.Is(err, ErrInvalidInput):
 		return 400, "INVALID_INPUT"
 	default:

@@ -98,6 +98,7 @@ func main() {
 		slog.Error("Critical: Could not connect to database", "error", err)
 		os.Exit(1)
 	}
+	database.Migrate(db)
 
 	// 2b. Connect to Redis
 	redisClient := cache.InitRedis(cfg)
@@ -179,7 +180,7 @@ func main() {
 	}
 	corsOrigins := cfg.CORSOrigins
 	if corsOrigins == "" {
-		corsOrigins = cfg.AdminAppURL
+		corsOrigins = "http://localhost:5173"
 	}
 
 	rawOrigins := strings.Split(corsOrigins, ",")
@@ -260,6 +261,13 @@ func main() {
 	app.Get("/api/health", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
+	app.Get("/swagger", func(c fiber.Ctx) error {
+		return c.Type("html").SendString(`<!DOCTYPE html><html><head><link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script><script>window.onload=()=>SwaggerUIBundle({url:"/swagger.json",dom_id:"#swagger-ui"});</script></body></html>`)
+	})
+	app.Get("/swagger.json", func(c fiber.Ctx) error {
+		return c.SendFile("docs/swagger.json")
+	})
+
 	// Catch-all: return a clean 404 JSON instead of Fiber's default 501.
 	app.Use(func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -288,16 +296,6 @@ func main() {
 			cancel()
 		}
 	}()
-
-	// Health Check
-	// Note: We use a shallow health check (no DB ping) to prevent the hosting
-	// provider's health prober from keeping the Neon DB awake 24/7.
-	app.Get("/health", func(c fiber.Ctx) error {
-		return response.Success(c, fiber.StatusOK, "Admin Backend health status", fiber.Map{
-			"status": "active",
-			// database and redis status omitted to allow DB auto-suspend
-		})
-	})
 
 	// 6. Start Server in a goroutine
 	go func() {
@@ -334,11 +332,11 @@ func main() {
 }
 
 func processDueProducts(ctx context.Context, db *gorm.DB) error {
-	productRepo := postgres.NewLUBProductRepository(db)
-	partRepo := postgres.NewLUBParticipationRepository(db)
-	bidRepo := postgres.NewLUBBidEntryRepository(db)
+	auctionRepo := postgres.NewAuctionRepository(db)
+	partRepo := postgres.NewAuctionParticipationRepository(db)
+	bidRepo := postgres.NewBidRepository(db)
 	auditRepo := postgres.NewAuditLogRepository(db)
 	auditSvc := services.NewAuditLogService(auditRepo)
-	lubSvc := lub.NewService(productRepo, partRepo, bidRepo, auditSvc, nil)
-	return lubSvc.ProcessDueProducts(ctx)
+	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, nil)
+	return lubSvc.ProcessDueAuctions(ctx)
 }
