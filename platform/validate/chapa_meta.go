@@ -11,8 +11,8 @@ import (
 
 // FeaturedChapaMeta is the meta block Chapa returns on featured-campaign payments.
 type FeaturedChapaMeta struct {
-	bidID        string `json:"bid_id"`
-	bidIDCamel   string `json:"bidId"`
+	BidID        string `json:"bid_id"`
+	BidIDCamel   string `json:"bidId"`
 	AgentID      string `json:"agent_id"`
 	AgentIDCamel string `json:"agentId"`
 	Placement    string `json:"placement"`
@@ -31,7 +31,7 @@ func ParseFeaturedChapaMeta(meta interface{}) (FeaturedChapaMeta, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return FeaturedChapaMeta{}, err
 	}
-	m.bidID = FirstNonEmpty(m.bidID, m.bidIDCamel)
+	m.BidID = FirstNonEmpty(m.BidID, m.BidIDCamel)
 	m.AgentID = FirstNonEmpty(m.AgentID, m.AgentIDCamel)
 	m.DaysInt = 1
 	if ds := strings.TrimSpace(m.Days); ds != "" {
@@ -39,10 +39,10 @@ func ParseFeaturedChapaMeta(meta interface{}) (FeaturedChapaMeta, error) {
 			m.DaysInt = n
 		}
 	}
-	if m.bidID == "" || m.AgentID == "" {
+	if m.BidID == "" || m.AgentID == "" {
 		return m, fmt.Errorf("missing bid_id or agent_id in chapa meta")
 	}
-	if _, err := uuid.Parse(m.bidID); err != nil {
+	if _, err := uuid.Parse(m.BidID); err != nil {
 		return m, fmt.Errorf("invalid bid_id in chapa meta")
 	}
 	if _, err := uuid.Parse(m.AgentID); err != nil {

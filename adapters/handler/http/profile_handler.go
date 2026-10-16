@@ -10,16 +10,16 @@ import (
 )
 
 type ProfileHandler struct {
-	userService *services.UserService
+	userService services.UserService
 	audit       ports.AuditLogService
 }
 
-func NewProfileHandler(userService *services.UserService, audit ports.AuditLogService) *ProfileHandler {
-	return &ProfileHandler{userService: userService, audit: audit}
+func NewProfileHandler(userService services.UserService, audit ports.AuditLogService) ProfileHandler {
+	return ProfileHandler{userService: userService, audit: audit}
 }
 
 // GetMyProfile returns the authenticated user's profile
-func (h *ProfileHandler) GetMyProfile(c fiber.Ctx) error {
+func (h ProfileHandler) GetMyProfile(c fiber.Ctx) error {
 	userIDStr := GetUserID(c)
 	if userIDStr == "" {
 		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)
@@ -41,7 +41,7 @@ type UpdateProfileRequest struct {
 }
 
 // UpdateMyProfile updates the authenticated user's profile
-func (h *ProfileHandler) UpdateMyProfile(c fiber.Ctx) error {
+func (h ProfileHandler) UpdateMyProfile(c fiber.Ctx) error {
 	userIDStr := GetUserID(c)
 	if userIDStr == "" {
 		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)
@@ -87,7 +87,7 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"newPassword" validate:"required,min=8"`
 }
 
-func (h *ProfileHandler) ChangeMyPassword(c fiber.Ctx) error {
+func (h ProfileHandler) ChangeMyPassword(c fiber.Ctx) error {
 	userIDStr := GetUserID(c)
 	if userIDStr == "" {
 		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)

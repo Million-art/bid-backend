@@ -19,7 +19,7 @@ type Notification struct {
 	ActionLabel string    `gorm:"type:varchar(50)" json:"actionLabel,omitempty"`
 
 	// Related entities
-	bidID          *uuid.UUID `gorm:"type:uuid" json:"bidId,omitempty"`
+	BidID          *uuid.UUID `gorm:"type:uuid;column:bid_id" json:"bidId,omitempty"`
 	ConfirmationID *uuid.UUID `gorm:"type:uuid" json:"confirmationId,omitempty"`
 	PayoutID       *uuid.UUID `gorm:"type:uuid" json:"payoutId,omitempty"`
 
@@ -50,7 +50,7 @@ type NotificationPreferences struct {
 	// Event preferences
 	WinnerConfirmation bool `gorm:"default:true" json:"winnerConfirmation"`
 	PayoutUpdates      bool `gorm:"default:true" json:"payoutUpdates"`
-	bidUpdates         bool `gorm:"default:true" json:"bidUpdates"`
+	BidUpdates         bool `gorm:"default:true;column:bid_updates" json:"bidUpdates"`
 	Marketing          bool `gorm:"default:false" json:"marketing"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime" json:"createdAt"`

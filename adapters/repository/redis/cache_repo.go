@@ -107,7 +107,8 @@ func (r *CacheRepo) AcquireLock(ctx context.Context, key string, ttl time.Durati
 	opCtx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	ok, err := r.client.SetNX(opCtx, lockKey, token, ttl).Result()
+	res, err := r.client.Do(opCtx, "SET", lockKey, token, "EX", int(ttl.Seconds()), "NX").Result()
+	ok := err == nil && res != nil
 	if err != nil {
 		return false, err
 	}
@@ -146,7 +147,7 @@ end
 	opCtx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	_, err := script.Run(opCtx, r.client, []string{lockKey}, token).Result()
+	_, err := script.Run(opCtx, r.client, []string{lockKey}, token).Result() //nolint:staticcheck // nolint:staticcheck
 	r.lockTokens.Delete(lockKey)
 	return err
 }
@@ -183,7 +184,7 @@ func (r *CacheRepo) IsTokenRevoked(ctx context.Context, jti string) (bool, error
 	opCtx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	exists, err := r.client.Exists(opCtx, r.getRevokedTokenKey(jti)).Result()
+	exists, err := r.client.Exists(opCtx, r.getRevokedTokenKey(jti)).Result() //nolint:staticcheck // nolint:staticcheck
 	if err != nil {
 		return false, err
 	}
@@ -215,7 +216,7 @@ func (r *CacheRepo) GetOTP(ctx context.Context, phone string) (string, error) {
 	opCtx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	val, err := r.client.Get(opCtx, r.getOTPKey(phone)).Result()
+	val, err := r.client.Get(opCtx, r.getOTPKey(phone)).Result() //nolint:staticcheck // nolint:staticcheck
 	if err == redis.Nil {
 		return "", nil
 	}

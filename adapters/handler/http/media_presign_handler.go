@@ -198,13 +198,13 @@ func (h *MediaPresignHandler) presignOne(f presignFileRequest) (fiber.Map, error
 	contentType := strings.TrimSpace(f.Type)
 
 	if f.Size <= 0 {
-		return nil, fmt.Errorf("Invalid file size")
+		return nil, fmt.Errorf("invalid file size")
 	}
 	if f.Size > h.getMaxBytes() {
-		return nil, fmt.Errorf("File too large (max %dMB)", h.maxUploadSizeMB)
+		return nil, fmt.Errorf("file too large (max %dMB)", h.maxUploadSizeMB)
 	}
 	if !isAllowedByTypeOrName(name, contentType) {
-		return nil, fmt.Errorf("Unsupported file type")
+		return nil, fmt.Errorf("unsupported file type")
 	}
 
 	mediaType := "image"
@@ -219,7 +219,7 @@ func (h *MediaPresignHandler) presignOne(f presignFileRequest) (fiber.Map, error
 
 	p, err := h.presign.PresignPut(objectName, contentType, 10*time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create presigned URL")
+		return nil, fmt.Errorf("failed to create presigned URL")
 	}
 	if p.PublicURL == "" {
 		return nil, fmt.Errorf("R2 public domain is not configured")
@@ -227,7 +227,7 @@ func (h *MediaPresignHandler) presignOne(f presignFileRequest) (fiber.Map, error
 
 	view, err := h.presign.PresignGet(p.Key, 10*time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create view URL")
+		return nil, fmt.Errorf("failed to create view URL")
 	}
 
 	return fiber.Map{
