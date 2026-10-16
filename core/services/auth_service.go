@@ -19,23 +19,291 @@ import (
 )
 
 type AuthService struct {
-	userRepo ports.UserRepository
-	audit    ports.AuditLogService
-	email    ports.EmailService
-	cache    ports.CacheRepository
-	sms      ports.SmsService
-	config   *env.Config
+	userRepo        ports.UserRepository
+	participantRepo ports.ParticipantUserRepository
+	audit           ports.AuditLogService
+	email           ports.EmailService
+	cache           ports.CacheRepository
+	sms             ports.SmsService
+	config          *env.Config
 }
 
-func NewAuthService(userRepo ports.UserRepository, audit ports.AuditLogService, email ports.EmailService, cache ports.CacheRepository, sms ports.SmsService, config *env.Config) *AuthService {
+func NewAuthService(userRepo ports.UserRepository, participantRepo ports.ParticipantUserRepository, audit ports.AuditLogService, email ports.EmailService, cache ports.CacheRepository, sms ports.SmsService, config *env.Config) *AuthService {
 	return &AuthService{
-		userRepo: userRepo,
-		audit:    audit,
-		email:    email,
-		cache:    cache,
-		sms:      sms,
-		config:   config,
+		userRepo:        userRepo,
+		participantRepo: participantRepo,
+		audit:           audit,
+		email:           email,
+		cache:           cache,
+		sms:             sms,
+		config:          config,
 	}
+}
+
+func NormalizePhone(phone string) (normalized string, digits string) {
+	clean := strings.TrimSpace(phone)
+	digits = strings.ReplaceAll(strings.ReplaceAll(clean, "+", ""), " ", "")
+	if strings.HasPrefix(digits, "0") {
+		digits = "251" + digits[1:]
+	}
+	if digits == "" {
+		return "", ""
+	}
+	return "+" + digits, digits
+}
+
+func (s *AuthService) SendSignupOTP(ctx context.Context, phone string) error {
+	log := logger.FromContext(ctx)
+	normalizedPhone, digits := NormalizePhone(phone)
+	if normalizedPhone == "" || len(digits) < 8 {
+		return domain.NewAppError(400, "Valid phone number is required", nil)
+	}
+
+	if existing, err := s.userRepo.GetByPhone(normalizedPhone); err == nil && existing != nil {
+		return domain.ErrConflict
+	}
+	mockEmail := fmt.Sprintf("%s@carramarket.com", digits)
+	if existing, err := s.userRepo.GetByEmail(mockEmail); err == nil && existing != nil {
+		return domain.ErrConflict
+	}
+
+	otp := generateNumericOTP(6)
+	cacheKey := fmt.Sprintf("signup_otp:%s", normalizedPhone)
+	if s.cache != nil {
+		if err := s.cache.SetOTP(ctx, cacheKey, otp, 10*time.Minute); err != nil {
+			return err
+		}
+	}
+
+	log.Info("auth.signup.otp_generated", "phone", normalizedPhone, "otp", otp)
+
+	if s.sms != nil {
+		msg := fmt.Sprintf("Your CarraMarket verification code is: %s. Valid for 10 minutes.", otp)
+		if err := s.sms.SendSms(normalizedPhone, msg); err != nil {
+			log.Warn("auth.signup.sms_failed", "phone", normalizedPhone, "error", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *AuthService) VerifySignupOTP(ctx context.Context, phone, code string) (string, error) {
+	normalizedPhone, digits := NormalizePhone(phone)
+	code = strings.TrimSpace(code)
+	if normalizedPhone == "" || len(digits) < 8 || len(code) != 6 {
+		return "", domain.ErrUnauthorized
+	}
+
+	cacheKey := fmt.Sprintf("signup_otp:%s", normalizedPhone)
+	if s.cache == nil {
+		return "", domain.ErrUnauthorized
+	}
+	storedOTP, err := s.cache.GetOTP(ctx, cacheKey)
+	if err != nil || storedOTP == "" || storedOTP != code {
+		return "", domain.ErrUnauthorized
+	}
+
+	_ = s.cache.DeleteOTP(ctx, cacheKey)
+
+	return s.generatePhoneToken(normalizedPhone, 15*time.Minute, "phone_verify")
+}
+
+func (s *AuthService) VerifyPhoneToken(tokenStr, expectedPurpose string) (string, error) {
+	if strings.TrimSpace(tokenStr) == "" {
+		return "", domain.ErrUnauthorized
+	}
+	claims, err := s.VerifyToken(tokenStr, s.config.JWTAccessSecret)
+	if err != nil {
+		return "", domain.ErrUnauthorized
+	}
+	purpose, _ := claims["purpose"].(string)
+	if purpose != expectedPurpose {
+		return "", domain.ErrUnauthorized
+	}
+	sub, _ := claims["sub"].(string)
+	if strings.TrimSpace(sub) == "" {
+		return "", domain.ErrUnauthorized
+	}
+	return sub, nil
+}
+
+func (s *AuthService) Signup(ctx context.Context, phone, fullName, password string, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
+	normalizedPhone, digits := NormalizePhone(phone)
+	fullName = strings.TrimSpace(fullName)
+	if normalizedPhone == "" || len(digits) < 8 {
+		return "", "", nil, domain.NewAppError(400, "Valid phone number is required", nil)
+	}
+	if len(fullName) < 2 {
+		return "", "", nil, domain.NewAppError(400, "Full name is required", nil)
+	}
+	if len(password) < 4 {
+		return "", "", nil, domain.NewAppError(400, "Password must be at least 4 characters", nil)
+	}
+
+	if existing, err := s.userRepo.GetByPhone(normalizedPhone); err == nil && existing != nil {
+		return "", "", nil, domain.ErrConflict
+	}
+	mockEmail := fmt.Sprintf("%s@carramarket.com", digits)
+	if existing, err := s.userRepo.GetByEmailIncludeDeleted(mockEmail); err == nil && existing != nil {
+		return "", "", nil, domain.ErrConflict
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	user := &domain.User{
+		ID:        uuid.New(),
+		FullName:  fullName,
+		Email:     mockEmail,
+		Password:  string(hashed),
+		Phone:     normalizedPhone,
+		JoinedVia: "web",
+		Role:      domain.RoleParticipant,
+		Status:    domain.StatusActive,
+	}
+
+	if err := s.userRepo.Create(user); err != nil {
+		return "", "", nil, err
+	}
+
+	if s.participantRepo != nil {
+		_ = s.participantRepo.UpsertByPhone(&domain.ParticipantUser{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			FullName:  user.FullName,
+			Phone:     user.Phone,
+			Status:    "active",
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+		})
+	}
+
+	accessToken, err := s.generateToken(user, s.config.JWTAccessSecret, 24*time.Hour, "access")
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	refreshToken, err := s.generateToken(user, s.config.JWTRefreshSecret, 30*24*time.Hour, "refresh")
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	_ = s.audit.Log(&domain.AuditLog{
+		UserID:   user.ID,
+		Action:   "USER_SIGNUP",
+		Entity:   "user",
+		EntityID: user.ID.String(),
+		Metadata: map[string]interface{}{
+			"phone": user.Phone,
+			"role":  user.Role,
+		},
+	}, auditCtx)
+
+	return accessToken, refreshToken, user, nil
+}
+
+func (s *AuthService) SendForgotPasswordOTP(ctx context.Context, phone string) error {
+	log := logger.FromContext(ctx)
+	normalizedPhone, digits := NormalizePhone(phone)
+	if normalizedPhone == "" || len(digits) < 8 {
+		return domain.NewAppError(400, "Valid phone number is required", nil)
+	}
+
+	_, err := s.userRepo.GetByPhone(normalizedPhone)
+	if err != nil && errors.Is(err, domain.ErrNotFound) {
+		mockEmail := fmt.Sprintf("%s@carramarket.com", digits)
+		_, err = s.userRepo.GetByEmail(mockEmail)
+	}
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.NewAppError(404, "No account found with this phone number", nil)
+		}
+		return err
+	}
+
+	otp := generateNumericOTP(6)
+	cacheKey := fmt.Sprintf("forgot_otp:%s", normalizedPhone)
+	if s.cache != nil {
+		if err := s.cache.SetOTP(ctx, cacheKey, otp, 10*time.Minute); err != nil {
+			return err
+		}
+	}
+
+	log.Info("auth.forgot_password.otp_generated", "phone", normalizedPhone, "otp", otp)
+
+	if s.sms != nil {
+		msg := fmt.Sprintf("Your CarraMarket password reset code is: %s. Valid for 10 minutes.", otp)
+		if err := s.sms.SendSms(normalizedPhone, msg); err != nil {
+			log.Warn("auth.forgot_password.sms_failed", "phone", normalizedPhone, "error", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *AuthService) VerifyForgotPasswordOTP(ctx context.Context, phone, code string) (string, error) {
+	normalizedPhone, digits := NormalizePhone(phone)
+	code = strings.TrimSpace(code)
+	if normalizedPhone == "" || len(digits) < 8 || len(code) != 6 {
+		return "", domain.ErrUnauthorized
+	}
+
+	cacheKey := fmt.Sprintf("forgot_otp:%s", normalizedPhone)
+	if s.cache == nil {
+		return "", domain.ErrUnauthorized
+	}
+	storedOTP, err := s.cache.GetOTP(ctx, cacheKey)
+	if err != nil || storedOTP == "" || storedOTP != code {
+		return "", domain.ErrUnauthorized
+	}
+
+	_ = s.cache.DeleteOTP(ctx, cacheKey)
+
+	return s.generatePhoneToken(normalizedPhone, 15*time.Minute, "password_reset")
+}
+
+func (s *AuthService) ResetPasswordWithToken(ctx context.Context, phone, resetToken, newPassword string) error {
+	tokenPhone, err := s.VerifyPhoneToken(resetToken, "password_reset")
+	if err != nil {
+		return domain.ErrUnauthorized
+	}
+	normalizedPhone, digits := NormalizePhone(phone)
+	if tokenPhone != normalizedPhone && tokenPhone != strings.TrimSpace(phone) {
+		return domain.ErrUnauthorized
+	}
+	if len(newPassword) < 4 {
+		return domain.NewAppError(400, "Password must be at least 4 characters", nil)
+	}
+
+	user, err := s.userRepo.GetByPhone(normalizedPhone)
+	if err != nil && errors.Is(err, domain.ErrNotFound) {
+		mockEmail := fmt.Sprintf("%s@carramarket.com", digits)
+		user, err = s.userRepo.GetByEmail(mockEmail)
+	}
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.NewAppError(404, "User not found", nil)
+		}
+		return err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	user.Password = string(hash)
+	if err := s.userRepo.Update(user); err != nil {
+		return err
+	}
+
+	return s.audit.Log(&domain.AuditLog{
+		UserID:   user.ID,
+		Action:   "PASSWORD_RESET",
+		Entity:   "user",
+		EntityID: user.ID.String(),
+	}, nil)
 }
 
 func (s *AuthService) Login(ctx context.Context, loginIdentifier, password string, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
@@ -373,6 +641,19 @@ func (s *AuthService) generateToken(user *domain.User, secret string, expiry tim
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
+}
+
+func (s *AuthService) generatePhoneToken(phone string, expiry time.Duration, purpose string) (string, error) {
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"sub":     phone,
+		"purpose": purpose,
+		"jti":     uuid.New().String(),
+		"iat":     now.Unix(),
+		"exp":     now.Add(expiry).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(s.config.JWTAccessSecret))
 }
 
 func maskEmail(email string) string {

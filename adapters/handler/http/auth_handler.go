@@ -24,8 +24,34 @@ func NewAuthHandler(authService *services.AuthService, config *env.Config) *Auth
 
 type LoginRequest struct {
 	LoginIdentifier string `json:"loginIdentifier"`
+	Identifier      string `json:"identifier"`
 	Email           string `json:"email"`
 	Password        string `json:"password" validate:"required,min=1"`
+}
+
+type SendOTPRequest struct {
+	Phone string `json:"phone" validate:"required"`
+}
+
+type VerifyOTPRequest struct {
+	Phone string `json:"phone" validate:"required"`
+	Code  string `json:"code"  validate:"required,min=6,max=6"`
+}
+
+type SignupRequest struct {
+	Phone             string `json:"phone"             validate:"required"`
+	FullName          string `json:"fullName"          validate:"required,min=2,max=120"`
+	Password          string `json:"password"          validate:"required,min=4"`
+	ConfirmPassword   string `json:"confirmPassword"   validate:"required"`
+	VerificationToken string `json:"verificationToken" validate:"required"`
+	AcceptTerms       bool   `json:"acceptTerms"`
+}
+
+type ForgotPasswordResetRequest struct {
+	Phone           string `json:"phone"           validate:"required"`
+	ResetToken      string `json:"resetToken"      validate:"required"`
+	NewPassword     string `json:"newPassword"     validate:"required,min=4"`
+	ConfirmPassword string `json:"confirmPassword" validate:"required"`
 }
 
 type ForgotPasswordRequest struct {
@@ -53,6 +79,9 @@ func (h *AuthHandler) Login(c fiber.Ctx) error {
 	}
 
 	identifier := strings.TrimSpace(req.LoginIdentifier)
+	if identifier == "" {
+		identifier = strings.TrimSpace(req.Identifier)
+	}
 	if identifier == "" {
 		identifier = strings.TrimSpace(req.Email)
 	}
@@ -230,4 +259,204 @@ func (h *AuthHandler) ResetPasswordOTP(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "Password updated successfully", nil)
+}
+
+// @Summary Send signup OTP
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body SendOTPRequest true "SendOTP"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/auth/send-otp [post]
+func (h *AuthHandler) SendOTP(c fiber.Ctx) error {
+	var req SendOTPRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	if err := h.authService.SendSignupOTP(c.Context(), req.Phone); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			return response.Error(c, fiber.StatusConflict, "Phone number is already registered", nil)
+		}
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to send verification code", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Verification code sent", fiber.Map{
+		"sent": true,
+	})
+}
+
+// @Summary Verify signup OTP
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body VerifyOTPRequest true "VerifyOTP"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/auth/verify-otp [post]
+func (h *AuthHandler) VerifyOTP(c fiber.Ctx) error {
+	var req VerifyOTPRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	token, err := h.authService.VerifySignupOTP(c.Context(), req.Phone, req.Code)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnauthorized, "Invalid or expired verification code", nil)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Phone verified", fiber.Map{
+		"verificationToken": token,
+	})
+}
+
+// @Summary Signup
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body SignupRequest true "Signup"
+// @Success 201 {object} map[string]interface{}
+// @Router /api/auth/signup [post]
+func (h *AuthHandler) Signup(c fiber.Ctx) error {
+	var req SignupRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	if !req.AcceptTerms {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "Please accept the Terms and Privacy Policy", nil)
+	}
+	if req.Password != req.ConfirmPassword {
+		return validate.Fail(c, "Passwords do not match", validate.FieldError{
+			Field:   "confirmPassword",
+			Rule:    "eqfield",
+			Message: "Passwords do not match",
+		})
+	}
+
+	tokenPhone, err := h.authService.VerifyPhoneToken(req.VerificationToken, "phone_verify")
+	if err != nil {
+		return validate.FailVerificationToken(c)
+	}
+
+	normalizedPhone, _ := services.NormalizePhone(req.Phone)
+	if err := validate.FailPhoneVerifyToken(c, tokenPhone, normalizedPhone, req.Phone); err != nil {
+		return err
+	}
+
+	auditCtx := domain.AuditContext(GetAuditContext(c))
+	accessToken, refreshToken, user, err := h.authService.Signup(c.Context(), normalizedPhone, req.FullName, req.Password, &auditCtx)
+	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			return response.Error(c, fiber.StatusConflict, "Phone number is already registered", nil)
+		}
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusInternalServerError, "Signup failed", err)
+	}
+
+	h.setRefreshTokenCookie(c, refreshToken)
+	h.setAccessTokenCookie(c, accessToken)
+
+	csrfToken, err := IssueCSRF(c, h.config, JTIFromToken(accessToken))
+	if err != nil {
+		Logger(c).Error("Failed to issue CSRF token on signup", "error", err)
+		return response.Error(c, fiber.StatusInternalServerError, "Signup failed", err)
+	}
+
+	return response.Success(c, fiber.StatusCreated, "Signup successful", fiber.Map{
+		"user":      user,
+		"csrfToken": csrfToken,
+	})
+}
+
+// @Summary Forgot password send OTP
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body SendOTPRequest true "ForgotSendOTP"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/auth/forgot-password/send-otp [post]
+func (h *AuthHandler) ForgotPasswordSendOTP(c fiber.Ctx) error {
+	var req SendOTPRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	if err := h.authService.SendForgotPasswordOTP(c.Context(), req.Phone); err != nil {
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to send verification code", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Verification code sent", fiber.Map{
+		"sent": true,
+	})
+}
+
+// @Summary Forgot password verify OTP
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body VerifyOTPRequest true "ForgotVerifyOTP"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/auth/forgot-password/verify-otp [post]
+func (h *AuthHandler) ForgotPasswordVerifyOTP(c fiber.Ctx) error {
+	var req VerifyOTPRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	token, err := h.authService.VerifyForgotPasswordOTP(c.Context(), req.Phone, req.Code)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnauthorized, "Invalid or expired verification code", nil)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Code verified", fiber.Map{
+		"resetToken": token,
+	})
+}
+
+// @Summary Forgot password reset
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body ForgotPasswordResetRequest true "ForgotPasswordReset"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/auth/forgot-password/reset [post]
+func (h *AuthHandler) ForgotPasswordReset(c fiber.Ctx) error {
+	var req ForgotPasswordResetRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	if req.NewPassword != req.ConfirmPassword {
+		return validate.Fail(c, "Passwords do not match", validate.FieldError{
+			Field:   "confirmPassword",
+			Rule:    "eqfield",
+			Message: "Passwords do not match",
+		})
+	}
+
+	if err := h.authService.ResetPasswordWithToken(c.Context(), req.Phone, req.ResetToken, req.NewPassword); err != nil {
+		if errors.Is(err, domain.ErrUnauthorized) {
+			return response.Error(c, fiber.StatusUnauthorized, "Invalid or expired reset session", nil)
+		}
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusInternalServerError, "Password reset failed", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Password updated successfully", fiber.Map{
+		"ok": true,
+	})
 }

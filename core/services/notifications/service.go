@@ -9,11 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// WebSocketBroadcaster defines interface for sending real-time messages
-type WebSocketBroadcaster interface {
-	BroadcastToUser(userID string, message interface{})
-}
-
 const legalNotifyBatchSize = 200
 
 type Service struct {
@@ -21,7 +16,6 @@ type Service struct {
 	userRepo            ports.UserRepository
 	participantUserRepo ports.ParticipantUserRepository
 	cacheRepo           ports.CacheRepository
-	wsBroadcaster       WebSocketBroadcaster
 	emailSvc            ports.EmailService
 	smsSvc              ports.SmsService
 	log                 *slog.Logger
@@ -32,7 +26,6 @@ func NewService(
 	userRepo ports.UserRepository,
 	participantUserRepo ports.ParticipantUserRepository,
 	cacheRepo ports.CacheRepository,
-	wsBroadcaster WebSocketBroadcaster,
 	emailSvc ports.EmailService,
 	smsSvc ports.SmsService,
 ) *Service {
@@ -41,31 +34,10 @@ func NewService(
 		userRepo:            userRepo,
 		participantUserRepo: participantUserRepo,
 		cacheRepo:           cacheRepo,
-		wsBroadcaster:       wsBroadcaster,
 		emailSvc:            emailSvc,
 		smsSvc:              smsSvc,
 		log:                 slog.Default(),
 	}
-}
-
-// BroadcastToUser sends notification via WebSocket for real-time delivery
-func (s *Service) BroadcastToUser(
-	userID uuid.UUID,
-	userType string,
-	notification *domain.Notification,
-) error {
-	if s.wsBroadcaster == nil {
-		return nil // WebSocket not configured
-	}
-
-	// Send to WebSocket broadcaster
-	message := map[string]interface{}{
-		"type": "notification",
-		"data": notification,
-	}
-
-	s.wsBroadcaster.BroadcastToUser(userID.String(), message)
-	return nil
 }
 
 // GetUserNotifications retrieves paginated notifications for a user

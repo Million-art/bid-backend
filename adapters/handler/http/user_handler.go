@@ -55,7 +55,9 @@ func (h *UserHandler) GetMe(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch profile", err)
 	}
 
-	return response.Success(c, fiber.StatusOK, "Profile fetched successfully", user)
+	return response.Success(c, fiber.StatusOK, "Profile fetched successfully", fiber.Map{
+		"user": user,
+	})
 }
 
 type UpdateMeRequest struct {
@@ -98,7 +100,40 @@ func (h *UserHandler) UpdateMe(c fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch updated profile", err)
 	}
-	return response.Success(c, fiber.StatusOK, "Profile updated successfully", user)
+	return response.Success(c, fiber.StatusOK, "Profile updated successfully", fiber.Map{
+		"user": user,
+	})
+}
+
+type ChangeMyPasswordRequest struct {
+	CurrentPassword string `json:"currentPassword" validate:"required"`
+	NewPassword     string `json:"newPassword"     validate:"required,min=4"`
+}
+
+func (h *UserHandler) ChangeMyPassword(c fiber.Ctx) error {
+	userIDStr, err := GetUserIDOrUnauthorized(c)
+	if err != nil {
+		return response.Error(c, fiber.StatusUnauthorized, "Unauthorized", err)
+	}
+	userID, _ := uuid.Parse(userIDStr)
+
+	var req ChangeMyPasswordRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	if err := h.service.ChangePassword(userID, req.CurrentPassword, req.NewPassword); err != nil {
+		if errors.Is(err, domain.ErrUnauthorized) {
+			return response.Error(c, fiber.StatusUnauthorized, "Current password is incorrect", nil)
+		}
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusBadRequest, "Failed to change password", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Password changed successfully", nil)
 }
 
 type CreateUserRequest struct {

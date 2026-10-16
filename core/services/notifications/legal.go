@@ -105,7 +105,6 @@ func (s *Service) flushLegalNotificationBatch(ctx context.Context, batch []*doma
 		if s.cacheRepo != nil {
 			_ = s.cacheRepo.InvalidateUnreadCount(ctx, n.UserID)
 		}
-		_ = s.BroadcastToUser(n.UserID, n.UserType, n)
 	}
 	return nil
 }

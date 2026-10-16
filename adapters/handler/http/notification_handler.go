@@ -43,17 +43,28 @@ func (h *NotificationHandler) GetUserNotifications(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if c.Query("offset") != "" {
+		l, o, oErr := validate.BindOffsetPagination(c, 20, 100)
+		if oErr != nil {
+			return oErr
+		}
+		limit = l
+		offset = o
+	}
 
 	notifications, total, err := h.service.GetUserNotifications(userID, userType, limit, offset)
 	if err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch notifications", err)
 	}
+	unreadCount, _ := h.service.GetUnreadCount(c.Context(), userID, userType)
 
 	return response.Success(c, fiber.StatusOK, "Notifications retrieved", fiber.Map{
-		"items": notifications,
-		"total": total,
-		"page":  page,
-		"limit": limit,
+		"items":         notifications,
+		"notifications": notifications,
+		"total":         total,
+		"unreadCount":   unreadCount,
+		"page":          page,
+		"limit":         limit,
 	})
 }
 
@@ -102,4 +113,18 @@ func (h *NotificationHandler) MarkAllAsRead(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "All notifications marked as read", nil)
+}
+
+// DeleteNotification
+func (h *NotificationHandler) DeleteNotification(c fiber.Ctx) error {
+	id, err := PathParamUUID(c, "id", "id")
+	if err != nil {
+		return err
+	}
+
+	if err := h.service.DeleteNotification(id); err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to delete notification", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Notification deleted", nil)
 }

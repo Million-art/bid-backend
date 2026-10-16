@@ -189,8 +189,8 @@ func (s *UserService) ChangePassword(userID uuid.UUID, currentPassword, newPassw
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(currentPassword)); err != nil {
 		return domain.ErrUnauthorized
 	}
-	if len(newPassword) < 8 {
-		return domain.NewAppError(400, "password must be at least 8 characters", nil)
+	if len(newPassword) < 4 {
+		return domain.NewAppError(400, "password must be at least 4 characters", nil)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {

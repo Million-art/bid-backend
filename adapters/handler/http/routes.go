@@ -70,7 +70,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	app.Get("/metrics", PrometheusHandler)
 
 	smsService := sms.NewAfroMessageService(cfg)
-	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, cacheRepo, nil, emailService, smsService)
+	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, cacheRepo, emailService, smsService)
 
 	// Auction (Lowest Unique Bid) setup
 	auctionRepo := postgres.NewAuctionRepository(db)
@@ -80,7 +80,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
 	auctionHandler := NewAuctionHandler(auctionService)
 
-	authService := services.NewAuthService(userRepo, auditService, emailService, cacheRepo, smsService, cfg)
+	authService := services.NewAuthService(userRepo, participantUserRepo, auditService, emailService, cacheRepo, smsService, cfg)
 	userService := services.NewUserService(userRepo, auditService, emailService, authService, cfg)
 	_ = chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	paymentLedgerSvc := paymentledger.NewService(paymentLedgerRepo, refundRepo, chapaClient, auctionService, auditService)
@@ -106,11 +106,12 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	registerPublicRoutes(api, legalDocHandler, limiterStorage, cfg)
 	registerAuthRoutes(api, authHandler, limiterStorage)
 
+	optionalAuth := OptionalAuthMiddleware(authService, cfg.JWTAccessSecret, cacheRepo)
 	protected := api.Group("/", AuthMiddlewareWithCache(authService, cfg.JWTAccessSecret, cacheRepo))
 
 	registerUserRoutes(protected, userHandler, participantHandler)
 	registerPaymentRoutes(protected, paymentHandler)
-	registerAuctionRoutes(api, protected, auctionAdminHandler, auctionHandler, cfg)
+	registerAuctionRoutes(api, protected, optionalAuth, auctionAdminHandler, auctionHandler, cfg)
 	registerMiscRoutes(protected, dashboardHandler, mediaPresignHandler, notificationHandler, legalDocHandler)
 
 	return nil
@@ -124,10 +125,16 @@ func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStora
 	auth := api.Group("/auth")
 	auth.Use(AuthRateLimit(limiterStorage))
 	auth.Post("/login", authHandler.Login)
+	auth.Post("/signup", authHandler.Signup)
+	auth.Post("/send-otp", authHandler.SendOTP)
+	auth.Post("/verify-otp", authHandler.VerifyOTP)
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/logout", authHandler.Logout)
 	auth.Post("/set-password", authHandler.SetPassword)
 	auth.Post("/forgot-password", authHandler.ForgotPassword)
+	auth.Post("/forgot-password/send-otp", authHandler.ForgotPasswordSendOTP)
+	auth.Post("/forgot-password/verify-otp", authHandler.ForgotPasswordVerifyOTP)
+	auth.Post("/forgot-password/reset", authHandler.ForgotPasswordReset)
 	auth.Post("/reset-password", authHandler.SetPassword)
 	auth.Post("/reset-password-otp", authHandler.ResetPasswordOTP)
 }
@@ -135,6 +142,7 @@ func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStora
 func registerUserRoutes(protected fiber.Router, userHandler *UserHandler, participantHandler *ParticipantHandler) {
 	protected.Get("/me", userHandler.GetMe)
 	protected.Patch("/me", userHandler.UpdateMe)
+	protected.Patch("/me/password", userHandler.ChangeMyPassword)
 
 	protected.Get("/participants", participantHandler.List)
 	protected.Patch("/participants/:id/status", participantHandler.UpdateStatus)
@@ -165,19 +173,21 @@ func registerMiscRoutes(protected fiber.Router, dashboardHandler *DashboardHandl
 	notifications := protected.Group("/notifications")
 	notifications.Get("/", notificationHandler.GetUserNotifications)
 	notifications.Get("/unread-count", notificationHandler.GetUnreadCount)
+	notifications.Get("/unread/count", notificationHandler.GetUnreadCount)
 	notifications.Patch("/:id/read", notificationHandler.MarkAsRead)
 	notifications.Patch("/read-all", notificationHandler.MarkAllAsRead)
+	notifications.Delete("/:id", notificationHandler.DeleteNotification)
 }
 
-func registerAuctionRoutes(api fiber.Router, protected fiber.Router, adminHandler *AuctionAdminHandler, publicHandler *AuctionHandler, cfg *env.Config) {
+func registerAuctionRoutes(api fiber.Router, protected fiber.Router, optionalAuth fiber.Handler, adminHandler *AuctionAdminHandler, publicHandler *AuctionHandler, cfg *env.Config) {
 	// Public routes
 	api.Get("/public/auctions", publicHandler.ListPublicAuctions)
 	api.Get("/public/auctions/:id", publicHandler.GetPublicAuction)
-	api.Post("/public/auctions/:auctionId/participate", publicHandler.RecordParticipation)
-	api.Post("/public/bids", publicHandler.PlaceBid)
-	api.Patch("/public/bids/:id", publicHandler.UpdateBid)
-	api.Get("/public/auctions/:auctionId/my-bids", publicHandler.GetMyBids)
-	api.Get("/public/auctions/:auctionId/my-participation", publicHandler.GetMyParticipation)
+	api.Post("/public/auctions/:auctionId/participate", optionalAuth, publicHandler.RecordParticipation)
+	api.Post("/public/bids", optionalAuth, publicHandler.PlaceBid)
+	api.Patch("/public/bids/:id", optionalAuth, publicHandler.UpdateBid)
+	api.Get("/public/auctions/:auctionId/my-bids", optionalAuth, publicHandler.GetMyBids)
+	api.Get("/public/auctions/:auctionId/my-participation", optionalAuth, publicHandler.GetMyParticipation)
 
 	// Admin routes
 	protected.Get("/auctions", adminHandler.List)

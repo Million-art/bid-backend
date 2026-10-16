@@ -23,15 +23,15 @@ func NewAuctionHandler(svc *lub.Service) *AuctionHandler {
 type RecordParticipationRequest struct {
 	AuctionID     string  `json:"auctionId"     validate:"omitempty,uuid"`
 	ProductID     string  `json:"productId"     validate:"omitempty,uuid"`
-	ParticipantID string  `json:"participantId" validate:"required"`
-	TransactionID string  `json:"transactionId" validate:"required"`
-	FeePaid       float64 `json:"feePaid"       validate:"required,gt=0"`
+	ParticipantID string  `json:"participantId"`
+	TransactionID string  `json:"transactionId"`
+	FeePaid       float64 `json:"feePaid"`
 }
 
 type PlaceBidRequest struct {
 	AuctionID     string  `json:"auctionId"     validate:"omitempty,uuid"`
 	ProductID     string  `json:"productId"     validate:"omitempty,uuid"`
-	ParticipantID string  `json:"participantId" validate:"required"`
+	ParticipantID string  `json:"participantId"`
 	BidValue      float64 `json:"bidValue"      validate:"required,gt=0"`
 }
 
@@ -93,17 +93,41 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "valid auctionId is required", nil)
 	}
 
+	participantID := strings.TrimSpace(req.ParticipantID)
+	if participantID == "" {
+		participantID = strings.TrimSpace(GetUserID(c))
+	}
+	if participantID == "" {
+		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)
+	}
+
+	txID := strings.TrimSpace(req.TransactionID)
+	if txID == "" {
+		txID = "tx_" + uuid.New().String()
+	}
+
+	feePaid := domain.NewMoney(req.FeePaid)
+	if req.FeePaid <= 0 {
+		a, aErr := h.svc.GetAuctionByID(auctionID)
+		if aErr != nil {
+			return mapLUBError(c, aErr)
+		}
+		feePaid = a.EntranceFee
+	}
+
 	part, err := h.svc.RecordParticipation(
 		c.Context(),
 		auctionID,
-		strings.TrimSpace(req.ParticipantID),
-		req.TransactionID,
-		domain.NewMoney(req.FeePaid),
+		participantID,
+		txID,
+		feePaid,
 	)
 	if err != nil {
 		return mapLUBError(c, err)
 	}
-	return response.Success(c, fiber.StatusCreated, "Participation recorded", part)
+	return response.Success(c, fiber.StatusCreated, "Participation recorded", fiber.Map{
+		"participation": part,
+	})
 }
 
 func (h *AuctionHandler) PlaceBid(c fiber.Ctx) error {
@@ -120,10 +144,18 @@ func (h *AuctionHandler) PlaceBid(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "valid auctionId is required", nil)
 	}
 
+	participantID := strings.TrimSpace(req.ParticipantID)
+	if participantID == "" {
+		participantID = strings.TrimSpace(GetUserID(c))
+	}
+	if participantID == "" {
+		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)
+	}
+
 	bid, err := h.svc.PlaceBid(
 		c.Context(),
 		auctionID,
-		strings.TrimSpace(req.ParticipantID),
+		participantID,
 		domain.NewMoney(req.BidValue),
 	)
 	if err != nil {
@@ -146,7 +178,10 @@ func (h *AuctionHandler) UpdateBid(c fiber.Ctx) error {
 		participantID = strings.TrimSpace(body.ParticipantID)
 	}
 	if participantID == "" {
-		return response.Error(c, fiber.StatusBadRequest, "participantId is required", nil)
+		participantID = strings.TrimSpace(GetUserID(c))
+	}
+	if participantID == "" {
+		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)
 	}
 
 	var req UpdateBidRequest
@@ -172,7 +207,10 @@ func (h *AuctionHandler) GetMyBids(c fiber.Ctx) error {
 	}
 	participantID := strings.TrimSpace(c.Query("participantId"))
 	if participantID == "" {
-		return response.Error(c, fiber.StatusBadRequest, "participantId query param is required", nil)
+		participantID = strings.TrimSpace(GetUserID(c))
+	}
+	if participantID == "" {
+		return response.Success(c, fiber.StatusOK, "Bids retrieved", []domain.Bid{})
 	}
 	bids, err := h.svc.ListMyBids(auctionID, participantID)
 	if err != nil {
@@ -192,7 +230,10 @@ func (h *AuctionHandler) GetMyParticipation(c fiber.Ctx) error {
 	}
 	participantID := strings.TrimSpace(c.Query("participantId"))
 	if participantID == "" {
-		return response.Error(c, fiber.StatusBadRequest, "participantId query param is required", nil)
+		participantID = strings.TrimSpace(GetUserID(c))
+	}
+	if participantID == "" {
+		return response.Success(c, fiber.StatusOK, "Not participating", fiber.Map{"participating": false})
 	}
 	part, err := h.svc.GetParticipation(auctionID, participantID)
 	if err != nil {

@@ -180,7 +180,7 @@ func main() {
 	}
 	corsOrigins := cfg.CORSOrigins
 	if corsOrigins == "" {
-		corsOrigins = "http://localhost:5173"
+		corsOrigins = "http://localhost:3000,http://localhost:5173"
 	}
 
 	rawOrigins := strings.Split(corsOrigins, ",")
