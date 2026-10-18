@@ -25,6 +25,15 @@ import (
 )
 
 func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cfg *env.Config) error {
+	healthHandler := func(c fiber.Ctx) error {
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"status":    "healthy",
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+	app.Get("/health", healthHandler)
+	app.Get("/api/health", healthHandler)
+
 	api := app.Group("/api", CSRF(cfg))
 
 	var limiterStorage fiber.Storage

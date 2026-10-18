@@ -1,0 +1,218 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/bid-backend
+  SERVICE_NAME: carramarket-backend
+  CONTAINER_PORT: 8080
+  HEALTH_ENDPOINT: /health
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Run tests with race detection
+        run: go test -v -race -timeout 5m ./...
+
+  docker:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_uri: ${{ steps.image-uri.outputs.uri }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export Target Image URI
+        id: image-uri
+        run: |
+          echo "uri=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy with Zero-Downtime & Auto-Rollback
+    needs: docker
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          TARGET_IMAGE: ${{ needs.docker.outputs.image_uri }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
+          HEALTH_ENDPOINT: ${{ env.HEALTH_ENDPOINT }}
+          REGISTRY: ${{ env.REGISTRY }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASS: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: TARGET_IMAGE,SERVICE_NAME,CONTAINER_PORT,HEALTH_ENDPOINT,REGISTRY,REGISTRY_USER,REGISTRY_PASS
+          script_stop: true
+          script: |
+            echo "=========================================================="
+            echo "🚀 Starting Zero-Downtime Deployment for $SERVICE_NAME"
+            echo "📦 Target image: $TARGET_IMAGE"
+            echo "=========================================================="
+
+            # Authenticate with container registry on remote server
+            echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+
+            # Pull target image
+            echo "⬇️ Pulling new image..."
+            docker pull "$TARGET_IMAGE"
+
+            # Check currently running container (active color)
+            LIVE_CONTAINER=""
+            if docker ps --format '{{.Names}}' | grep -q "^${SERVICE_NAME}-blue$"; then
+              LIVE_CONTAINER="${SERVICE_NAME}-blue"
+              NEW_CONTAINER="${SERVICE_NAME}-green"
+              NEW_PORT="8081"
+            elif docker ps --format '{{.Names}}' | grep -q "^${SERVICE_NAME}-green$"; then
+              LIVE_CONTAINER="${SERVICE_NAME}-green"
+              NEW_CONTAINER="${SERVICE_NAME}-blue"
+              NEW_PORT="8080"
+            else
+              # First time deploy or standalone
+              LIVE_CONTAINER=""
+              NEW_CONTAINER="${SERVICE_NAME}-blue"
+              NEW_PORT="8080"
+            fi
+
+            echo "Current live container: ${LIVE_CONTAINER:-none}"
+            echo "Target container to deploy: $NEW_CONTAINER on port $NEW_PORT"
+
+            # Ensure previous instance of candidate container is removed
+            docker rm -f "$NEW_CONTAINER" 2>/dev/null || true
+
+            # Start new container
+            echo "▶️ Launching $NEW_CONTAINER..."
+            docker run -d \
+              --name "$NEW_CONTAINER" \
+              --restart unless-stopped \
+              --env-file /etc/carramarket/backend.env \
+              -p "127.0.0.1:${NEW_PORT}:${CONTAINER_PORT}" \
+              "$TARGET_IMAGE"
+
+            # Health Check Verification
+            echo "🩺 Performing health verification on http://127.0.0.1:${NEW_PORT}${HEALTH_ENDPOINT}..."
+            HEALTHY=false
+            MAX_ATTEMPTS=30
+            ATTEMPT=1
+
+            while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${NEW_PORT}${HEALTH_ENDPOINT}" || true)
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "✅ Health check PASSED on attempt $ATTEMPT ($HTTP_STATUS OK)"
+                HEALTHY=true
+                break
+              fi
+              echo "⏳ Waiting for service to become healthy... (attempt $ATTEMPT/$MAX_ATTEMPTS, status: $HTTP_STATUS)"
+              sleep 2
+              ATTEMPT=$((ATTEMPT + 1))
+            done
+
+            if [ "$HEALTHY" = true ]; then
+              echo "🎉 New container is healthy! Switching live traffic..."
+
+              # Update reverse proxy upstream or port forwarding
+              if [ -f /etc/nginx/conf.d/backend.conf ]; then
+                sed -i "s/127\.0\.0\.1:[0-9]*/127.0.0.1:${NEW_PORT}/g" /etc/nginx/conf.d/backend.conf
+                nginx -t && systemctl reload nginx
+              fi
+
+              # Gracefully stop old live container now that new one handles traffic
+              if [ -n "$LIVE_CONTAINER" ]; then
+                echo "🧹 Gracefully stopping previous container $LIVE_CONTAINER..."
+                docker stop "$LIVE_CONTAINER" || true
+                docker rm "$LIVE_CONTAINER" || true
+              fi
+
+              # Clean up dangling images
+              docker image prune -f --filter "until=24h"
+              echo "=========================================================="
+              echo "✨ Deployment SUCCESSFUL with zero downtime!"
+              echo "=========================================================="
+            else
+              echo "=========================================================="
+              echo "❌ Health check FAILED after $MAX_ATTEMPTS attempts."
+              echo "🛑 Triggering AUTOMATED ROLLBACK to maintain zero downtime!"
+              echo "=========================================================="
+
+              # Show container logs for troubleshooting
+              echo "--- Failing Container Logs ---"
+              docker logs --tail 50 "$NEW_CONTAINER" || true
+              echo "------------------------------"
+
+              # Stop and remove the broken new container
+              docker rm -f "$NEW_CONTAINER"
+
+              if [ -n "$LIVE_CONTAINER" ]; then
+                echo "🛡️ Previous container $LIVE_CONTAINER remained live. No downtime was incurred."
+              else
+                echo "⚠️ No previous container was running."
+              fi
+
+              exit 1
+            fi
