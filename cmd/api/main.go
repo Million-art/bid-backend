@@ -100,7 +100,19 @@ func main() {
 		slog.Error("Critical: Could not connect to database", "error", err)
 		os.Exit(1)
 	}
-	database.Migrate(db)
+
+	// Environment-based migration: only run migrations in non-production environments
+	if !isProductionEnvironment(cfg) {
+		slog.Info("Development environment - running database migrations")
+		database.Migrate(db)
+
+		// Seed admin user only in non-production environments
+		if err := seedAdmin(cfg, db); err != nil {
+			slog.Error("Failed to seed admin user", "error", err)
+		}
+	} else {
+		slog.Info("Production environment - using existing database, skipping migrations and seeding")
+	}
 
 	// 2b. Connect to Redis
 	redisClient := cache.InitRedis(cfg)
@@ -109,7 +121,6 @@ func main() {
 	}
 
 	// 3. Initialize Fiber App
-	slog.Info("Initializing Admin Backend", "port", cfg.AppPort)
 	app := fiber.New(fiber.Config{
 		BodyLimit: 100 * 1024 * 1024, // 100MB buffer for multi-file/video media uploads
 		ErrorHandler: func(c fiber.Ctx, err error) error {
@@ -250,35 +261,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 6. Seed admin user if not exists
-	seedAdmin := func() error {
-		// Check if admin user already exists
-		admin, err := postgres.NewUserRepository(db).GetByEmail(cfg.SeedAdminEmail)
-		if err == nil && admin != nil {
-			slog.Info("Admin user already exists, skipping seed")
-			return nil
+	// 6. Seed admin user if not exists (only in non-production)
+	if !isProductionEnvironment(cfg) {
+		if err := seedAdmin(cfg, db); err != nil {
+			slog.Error("Failed to seed admin user", "error", err)
 		}
-		// Create admin user
-		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.SeedAdminPassword), bcrypt.DefaultCost)
-		if err != nil {
-			return fmt.Errorf("failed to hash admin password: %w", err)
-		}
-		user := &domain.User{
-			ID:       uuid.New(),
-			FullName: "System Admin",
-			Email:    cfg.SeedAdminEmail,
-			Password: string(hash),
-			Role:     domain.RoleSuperAdmin,
-			Status:   domain.StatusActive,
-		}
-		if err := postgres.NewUserRepository(db).Create(user); err != nil {
-			return fmt.Errorf("failed to seed admin user: %w", err)
-		}
-		slog.Info("Admin user seeded successfully", "email", cfg.SeedAdminEmail)
-		return nil
-	}
-	if err := seedAdmin(); err != nil {
-		slog.Error("Failed to seed admin user", "error", err)
+	} else {
+		slog.Info("Production environment - skipping admin user seeding")
 	}
 
 	// Catch-all: return a clean 404 JSON instead of Fiber's default 501.
@@ -352,4 +341,46 @@ func processDueProducts(ctx context.Context, db *gorm.DB) error {
 	auditSvc := services.NewAuditLogService(auditRepo)
 	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, nil)
 	return lubSvc.ProcessDueAuctions(ctx)
+}
+
+// isProductionEnvironment checks if the environment is production
+func isProductionEnvironment(cfg *env.Config) bool {
+	env := os.Getenv("ENVIRONMENT")
+	if env == "production" || env == "prod" {
+		return true
+	}
+	return false
+}
+
+// seedAdmin seeds the admin user if it doesn't exist
+func seedAdmin(cfg *env.Config, db *gorm.DB) error {
+	// Check if admin already exists
+	userRepo := postgres.NewUserRepository(db)
+	existing, err := userRepo.GetByEmail(cfg.SeedAdminEmail)
+	if err == nil && existing != nil {
+		slog.Info("Admin user already exists, skipping seed", "email", cfg.SeedAdminEmail)
+		return nil
+	}
+
+	// Create admin user
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(cfg.SeedAdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	user := &domain.User{
+		ID:       uuid.New(),
+		FullName: "Admin",
+		Email:    cfg.SeedAdminEmail,
+		Password: string(hashedPassword),
+		Role:     domain.RoleSuperAdmin,
+		Status:   domain.StatusActive,
+	}
+
+	if err := userRepo.Create(user); err != nil {
+		return fmt.Errorf("failed to create admin user: %w", err)
+	}
+
+	slog.Info("Admin user seeded successfully", "email", cfg.SeedAdminEmail)
+	return nil
 }
