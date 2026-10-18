@@ -32,6 +32,11 @@ func (s *Service) ListParticipations(auctionID uuid.UUID, page, limit int) ([]do
 	return s.participationRepo.ListByAuction(auctionID, limit, offset)
 }
 
+func (s *Service) ListParticipantParticipations(participantID string, page, limit int) ([]domain.AuctionParticipation, int64, error) {
+	offset := (page - 1) * limit
+	return s.participationRepo.ListByParticipant(participantID, limit, offset)
+}
+
 func (s *Service) CountParticipants(auctionID uuid.UUID) (int64, error) {
 	return s.participationRepo.CountByAuction(auctionID)
 }
@@ -39,14 +44,33 @@ func (s *Service) CountParticipants(auctionID uuid.UUID) (int64, error) {
 // ---------------------- Bid queries ----------------------
 
 func (s *Service) GetBid(id uuid.UUID) (*domain.Bid, error) {
-	return s.bidRepo.GetByID(id)
+	b, err := s.bidRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	b.PopulateUpdateState()
+	return b, nil
 }
 
 func (s *Service) ListMyBids(auctionID uuid.UUID, participantID string) ([]domain.Bid, error) {
-	return s.bidRepo.ListByAuctionAndParticipant(auctionID, participantID)
+	bids, err := s.bidRepo.ListByAuctionAndParticipant(auctionID, participantID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bids {
+		bids[i].PopulateUpdateState()
+	}
+	return bids, nil
 }
 
 func (s *Service) ListAuctionBids(auctionID uuid.UUID, page, limit int) ([]domain.Bid, int64, error) {
 	offset := (page - 1) * limit
-	return s.bidRepo.ListByAuction(auctionID, limit, offset)
+	bids, total, err := s.bidRepo.ListByAuction(auctionID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range bids {
+		bids[i].PopulateUpdateState()
+	}
+	return bids, total, nil
 }

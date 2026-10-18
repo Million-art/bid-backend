@@ -27,6 +27,7 @@ type TaskRunner interface {
 }
 
 type PaymentProvider interface {
+	InitializeTransaction(req ChapaInitializeRequest) (*ChapaInitializeResponse, error)
 	VerifyTransaction(txRef string) (*ChapaTransactionSnapshot, error)
 	InitiateRefund(txRef string, amount float64, reason string, internalRef string) (string, error)
 	VerifyRefund(refID string) (string, error)

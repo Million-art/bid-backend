@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/bid-hub/admin-backend/core/ports"
@@ -24,6 +25,7 @@ type VerifiedSnapshot struct {
 	Meta           map[string]interface{}
 	CustomerEmail  string
 	CustomerFirst  string
+	BidValue       domain.Money
 }
 
 type Service struct {
@@ -32,6 +34,7 @@ type Service struct {
 	users           ports.ParticipantUserRepository
 	notificationSvc ports.NotificationService
 	log             *slog.Logger
+	pendingBids     sync.Map // map[string]domain.Money keyed by txRef
 }
 
 func NewService(
@@ -45,6 +48,55 @@ func NewService(
 		log = slog.Default()
 	}
 	return &Service{repo: repo, lubSvc: lubSvc, users: users, notificationSvc: notificationSvc, log: log}
+}
+
+func (s *Service) SetPendingBid(txRef string, bidValue domain.Money) {
+	txRef = strings.TrimSpace(txRef)
+	if txRef != "" && bidValue.IsPositive() {
+		s.pendingBids.Store(txRef, bidValue)
+	}
+}
+
+func (s *Service) resolveBidValue(txRef string, snap *VerifiedSnapshot) domain.Money {
+	if snap != nil && snap.BidValue.IsPositive() {
+		return snap.BidValue
+	}
+	if snap != nil && snap.Meta != nil {
+		switch raw := snap.Meta["bid_value"].(type) {
+		case string:
+			if m, err := domain.NewMoneyFromString(strings.TrimSpace(raw)); err == nil && m.IsPositive() {
+				return m
+			}
+		case float64:
+			if m := domain.NewMoney(raw); m.IsPositive() {
+				return m
+			}
+		}
+	}
+	if v, ok := s.pendingBids.Load(txRef); ok {
+		if m, ok := v.(domain.Money); ok && m.IsPositive() {
+			return m
+		}
+	}
+	return domain.Zero()
+}
+
+func (s *Service) placeInitialBidIfNeeded(ctx context.Context, txRef string, auctionID uuid.UUID, participantID string, snap *VerifiedSnapshot) {
+	bidVal := s.resolveBidValue(txRef, snap)
+	if !bidVal.IsPositive() {
+		return
+	}
+	existingBids, err := s.lubSvc.ListMyBids(auctionID, participantID)
+	if err == nil && len(existingBids) > 0 {
+		s.pendingBids.Delete(txRef)
+		return
+	}
+	if _, err := s.lubSvc.PlaceBid(ctx, auctionID, participantID, bidVal); err != nil {
+		s.log.Warn("chapa_initial_bid_place_failed", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", participantID, "bid_value", bidVal.String(), "error", err)
+		return
+	}
+	s.pendingBids.Delete(txRef)
+	s.log.Info("chapa_initial_bid_placed", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", participantID, "bid_value", bidVal.String())
 }
 
 func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) error {
@@ -114,7 +166,8 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		return fmt.Errorf("payment ledger upsert: %w", err)
 	}
 
-	if existingPart, err := s.lubSvc.GetParticipation(auctionID, userID.String()); err == nil && existingPart != nil {
+	if existingPart, err := s.lubSvc.GetParticipation(auctionID, userID.String()); err == nil && existingPart != nil && existingPart.Status == domain.ParticipationStatusActive {
+		s.placeInitialBidIfNeeded(ctx, txRef, auctionID, userID.String(), snap)
 		if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 			s.log.Error("chapa_mark_processed_failed", "tx_ref", txRef, "error", err)
 		}
@@ -122,9 +175,10 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		return nil
 	}
 
-	_, err := s.lubSvc.RecordParticipation(ctx, auctionID, userID.String(), txRef, pricePaid)
+	part, err := s.lubSvc.RecordParticipation(ctx, auctionID, userID.String(), txRef, pricePaid)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
+			s.placeInitialBidIfNeeded(ctx, txRef, auctionID, userID.String(), snap)
 			if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 				s.log.Error("chapa_mark_processed_after_conflict_failed", "tx_ref", txRef, "error", err)
 			}
@@ -144,6 +198,13 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		}
 	}
 
+	if part != nil {
+		p.ParticipationID = &part.ID
+		_ = s.repo.Upsert(ctx, p)
+	}
+
+	s.placeInitialBidIfNeeded(ctx, txRef, auctionID, userID.String(), snap)
+
 	if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, userID.String(), auctionID, "", pricePaid); err != nil {
 		s.log.Error("failed to send participation notification", "tx_ref", txRef, "user_id", userID, "error", err)
 	}
@@ -162,7 +223,8 @@ func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool
 		return false
 	}
 	txRef := p.TxRef
-	if existingPart, err := s.lubSvc.GetParticipation(*p.AuctionID, p.UserID.String()); err == nil && existingPart != nil {
+	if existingPart, err := s.lubSvc.GetParticipation(*p.AuctionID, p.UserID.String()); err == nil && existingPart != nil && existingPart.Status == domain.ParticipationStatusActive {
+		s.placeInitialBidIfNeeded(ctx, txRef, *p.AuctionID, p.UserID.String(), nil)
 		if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 			s.log.Error("chapa_retry_mark_processed_failed", "tx_ref", txRef, "error", err)
 			return false
@@ -172,6 +234,7 @@ func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool
 	_, err := s.lubSvc.RecordParticipation(ctx, *p.AuctionID, p.UserID.String(), txRef, p.Amount)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
+			s.placeInitialBidIfNeeded(ctx, txRef, *p.AuctionID, p.UserID.String(), nil)
 			_ = s.repo.MarkProcessed(ctx, txRef)
 			return true
 		}
@@ -185,12 +248,17 @@ func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool
 			return true
 		}
 	}
+	s.placeInitialBidIfNeeded(ctx, txRef, *p.AuctionID, p.UserID.String(), nil)
 	if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 		s.log.Error("chapa_retry_mark_processed_failed", "tx_ref", txRef, "error", err)
 		return false
 	}
 	s.log.Info("chapa_retry_fulfilled", "tx_ref", txRef)
 	return true
+}
+
+func (s *Service) GetPaymentByTxRef(ctx context.Context, txRef string) (*domain.Payment, error) {
+	return s.repo.GetByTxRef(ctx, strings.TrimSpace(txRef))
 }
 
 func (s *Service) RetryPaymentByTxRef(ctx context.Context, txRef string) (fulfilled bool, err error) {

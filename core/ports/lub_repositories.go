@@ -24,6 +24,7 @@ type AuctionParticipationRepository interface {
 	GetByAuctionAndParticipant(auctionID uuid.UUID, participantID string) (*domain.AuctionParticipation, error)
 	GetByTransactionID(txID string) (*domain.AuctionParticipation, error)
 	ListByAuction(auctionID uuid.UUID, limit, offset int) ([]domain.AuctionParticipation, int64, error)
+	ListByParticipant(participantID string, limit, offset int) ([]domain.AuctionParticipation, int64, error)
 	UpdateStatus(id uuid.UUID, status string) error
 	CountByAuction(auctionID uuid.UUID) (int64, error)
 }

@@ -191,7 +191,25 @@ func (s *Service) RefundParticipation(ctx context.Context, participationID uuid.
 
 // ---------------------- Bid management ----------------------
 
+// ValidateAuctionAndBid checks that the auction is open for bidding and (if bidValue > 0) the bid value is valid.
+func (s *Service) ValidateAuctionAndBid(auctionID uuid.UUID, bidValue domain.Money) (*domain.Auction, error) {
+	a, err := s.auctionRepo.GetByID(auctionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateBiddingOpen(a); err != nil {
+		return nil, err
+	}
+	if bidValue.IsPositive() {
+		if err := s.validateBidValue(a, bidValue); err != nil {
+			return nil, err
+		}
+	}
+	return a, nil
+}
+
 // PlaceBid places a new secret bid for a participant.
+// Each participant can place one initial bid per auction and update it once.
 func (s *Service) PlaceBid(
 	ctx context.Context,
 	auctionID uuid.UUID,
@@ -212,19 +230,31 @@ func (s *Service) PlaceBid(
 		return nil, err
 	}
 
+	existingBids, err := s.bidRepo.ListByAuctionAndParticipant(auctionID, participantID)
+	if err != nil {
+		return nil, err
+	}
+	if len(existingBids) > 0 {
+		return nil, domain.NewAppError(409, "You have already placed a bid on this auction. You can update your existing bid once.", nil)
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	bid := &domain.Bid{
 		ID:            uuid.New(),
 		AuctionID:     auctionID,
 		ParticipantID: participantID,
 		BidValue:      bidValue,
+		PlacedAt:      now,
+		UpdatedAt:     now,
 	}
 	if err := s.bidRepo.Create(bid); err != nil {
 		return nil, err
 	}
+	bid.PopulateUpdateState()
 	return bid, nil
 }
 
-// UpdateBid changes the bid_value on an existing Bid.
+// UpdateBid changes the bid_value on an existing Bid (allowed at most once).
 func (s *Service) UpdateBid(
 	ctx context.Context,
 	bidID uuid.UUID,
@@ -238,6 +268,9 @@ func (s *Service) UpdateBid(
 	if bid.ParticipantID != participantID {
 		return nil, domain.ErrForbidden
 	}
+	if bid.HasBeenUpdated() {
+		return nil, domain.NewAppError(422, "You can only update your bid one time", nil)
+	}
 
 	a, err := s.auctionRepo.GetByID(bid.AuctionID)
 	if err != nil {
@@ -249,6 +282,9 @@ func (s *Service) UpdateBid(
 	if err := s.validateBidValue(a, newBidValue); err != nil {
 		return nil, err
 	}
+	if bid.BidValue.Equal(newBidValue) {
+		return nil, domain.NewAppError(422, "New bid value must be different from your current bid", nil)
+	}
 
 	if existing, _ := s.bidRepo.GetByAuctionAndParticipantAndValue(bid.AuctionID, participantID, newBidValue); existing != nil {
 		if existing.ID != bidID {
@@ -256,10 +292,16 @@ func (s *Service) UpdateBid(
 		}
 	}
 
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if !now.After(bid.PlacedAt.Add(100 * time.Millisecond)) {
+		now = bid.PlacedAt.Add(time.Second)
+	}
 	bid.BidValue = newBidValue
+	bid.UpdatedAt = now
 	if err := s.bidRepo.Update(bid); err != nil {
 		return nil, err
 	}
+	bid.PopulateUpdateState()
 	return bid, nil
 }
 

@@ -55,6 +55,10 @@ func (m Money) Float64() float64 {
 	return f
 }
 
+func (m Money) Equal(other Money) bool {
+	return m.d.Equal(other.d)
+}
+
 func (m Money) LessThan(other Money) bool {
 	return m.d.LessThan(other.d)
 }

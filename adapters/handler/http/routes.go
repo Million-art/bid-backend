@@ -86,12 +86,12 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	participationRepo := postgres.NewAuctionParticipationRepository(db)
 	bidRepo := postgres.NewBidRepository(db)
 	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService)
+	chapaPaymentSvc := chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
-	auctionHandler := NewAuctionHandler(auctionService)
+	auctionHandler := NewAuctionHandler(auctionService, chapaPaymentSvc, chapaClient, userRepo, cfg)
 
 	authService := services.NewAuthService(userRepo, participantUserRepo, auditService, emailService, cacheRepo, smsService, cfg)
 	userService := services.NewUserService(userRepo, auditService, emailService, authService, cfg)
-	_ = chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	paymentLedgerSvc := paymentledger.NewService(paymentLedgerRepo, refundRepo, chapaClient, auctionService, auditService)
 	dashboardService := services.NewDashboardService(userRepo, auctionRepo, participantUserRepo, auditRepo)
 	legalDocService := services.NewLegalDocumentService(legalDocRepo, notificationService)
@@ -120,7 +120,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 
 	protected := api.Group("/", AuthMiddlewareWithCache(authService, cfg.JWTAccessSecret, cacheRepo))
 
-	registerUserRoutes(protected, userHandler, participantHandler)
+	registerUserRoutes(protected, userHandler, participantHandler, auctionHandler)
 	registerPaymentRoutes(protected, paymentHandler)
 	registerAdminAuctionRoutes(protected, auctionAdminHandler)
 	registerMiscRoutes(protected, dashboardHandler, mediaPresignHandler, notificationHandler, legalDocHandler)
@@ -151,10 +151,11 @@ func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStora
 	auth.Post("/reset-password-otp", authHandler.ResetPasswordOTP)
 }
 
-func registerUserRoutes(protected fiber.Router, userHandler *UserHandler, participantHandler *ParticipantHandler) {
+func registerUserRoutes(protected fiber.Router, userHandler *UserHandler, participantHandler *ParticipantHandler, auctionHandler *AuctionHandler) {
 	protected.Get("/me", userHandler.GetMe)
 	protected.Patch("/me", userHandler.UpdateMe)
 	protected.Patch("/me/password", userHandler.ChangeMyPassword)
+	protected.Get("/me/participations", auctionHandler.ListMyParticipations)
 
 	protected.Get("/participants", participantHandler.List)
 	protected.Patch("/participants/:id/status", participantHandler.UpdateStatus)
@@ -199,6 +200,10 @@ func registerPublicAuctionRoutes(api fiber.Router, optionalAuth fiber.Handler, p
 	api.Patch("/public/bids/:id", optionalAuth, publicHandler.UpdateBid)
 	api.Get("/public/auctions/:auctionId/my-bids", optionalAuth, publicHandler.GetMyBids)
 	api.Get("/public/auctions/:auctionId/my-participation", optionalAuth, publicHandler.GetMyParticipation)
+	api.Post("/public/payments/verify", optionalAuth, publicHandler.VerifyChapaPayment)
+	api.Get("/public/payments/verify/:txRef", optionalAuth, publicHandler.VerifyChapaPayment)
+	api.Post("/webhooks/chapa", publicHandler.ChapaWebhook)
+	api.Get("/webhooks/chapa", publicHandler.ChapaWebhook)
 }
 
 func registerAdminAuctionRoutes(protected fiber.Router, adminHandler *AuctionAdminHandler) {

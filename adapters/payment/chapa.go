@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,13 +19,113 @@ type ChapaClient struct {
 }
 
 func NewChapaClient(secretKey, baseURL string) *ChapaClient {
-	if baseURL == "" {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" || baseURL == "your_chapa_base_url" || (!strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://")) {
 		baseURL = "https://api.chapa.co/v1"
 	}
 	return &ChapaClient{
-		secretKey: secretKey,
+		secretKey: strings.TrimSpace(secretKey),
 		baseURL:   strings.TrimRight(baseURL, "/"),
 	}
+}
+
+type initializePayload struct {
+	Amount        string                 `json:"amount"`
+	Currency      string                 `json:"currency"`
+	Email         string                 `json:"email"`
+	FirstName     string                 `json:"first_name,omitempty"`
+	LastName      string                 `json:"last_name,omitempty"`
+	PhoneNumber   string                 `json:"phone_number,omitempty"`
+	TxRef         string                 `json:"tx_ref"`
+	CallbackURL   string                 `json:"callback_url,omitempty"`
+	ReturnURL     string                 `json:"return_url,omitempty"`
+	Customization map[string]string      `json:"customization,omitempty"`
+	Meta          map[string]interface{} `json:"meta,omitempty"`
+}
+
+type initializeAPIResponse struct {
+	Message interface{} `json:"message"`
+	Status  string      `json:"status"`
+	Data    struct {
+		CheckoutURL string `json:"checkout_url"`
+	} `json:"data"`
+}
+
+func (c *ChapaClient) InitializeTransaction(req ports.ChapaInitializeRequest) (*ports.ChapaInitializeResponse, error) {
+	if c.secretKey == "" || c.secretKey == "your_chapa_secret_key" {
+		return nil, fmt.Errorf("chapa secret key is not configured")
+	}
+	currency := strings.TrimSpace(req.Currency)
+	if currency == "" {
+		currency = "ETB"
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "CarraMarket"
+	}
+	if len(title) > 16 {
+		title = title[:16]
+	}
+	desc := strings.TrimSpace(req.Description)
+	if desc == "" {
+		desc = "Auction entrance fee and bid"
+	}
+	if len(desc) > 50 {
+		desc = desc[:50]
+	}
+
+	payload := initializePayload{
+		Amount:      req.Amount,
+		Currency:    currency,
+		Email:       req.Email,
+		FirstName:   req.FirstName,
+		LastName:    req.LastName,
+		PhoneNumber: req.PhoneNumber,
+		TxRef:       req.TxRef,
+		CallbackURL: req.CallbackURL,
+		ReturnURL:   req.ReturnURL,
+		Customization: map[string]string{
+			"title":       title,
+			"description": desc,
+		},
+		Meta: req.Meta,
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal initialize payload: %w", err)
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, c.baseURL+"/transaction/initialize", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create initialize request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.secretKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("chapa initialize request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("chapa initialize api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var ir initializeAPIResponse
+	if err := json.Unmarshal(respBody, &ir); err != nil {
+		return nil, fmt.Errorf("failed to decode initialize response: %w", err)
+	}
+	if !strings.EqualFold(ir.Status, "success") || strings.TrimSpace(ir.Data.CheckoutURL) == "" {
+		return nil, fmt.Errorf("chapa initialize unsuccessful: %s", string(respBody))
+	}
+	return &ports.ChapaInitializeResponse{
+		CheckoutURL: strings.TrimSpace(ir.Data.CheckoutURL),
+		TxRef:       req.TxRef,
+	}, nil
 }
 
 type verifyResponse struct {

@@ -57,6 +57,18 @@ func (r *AuctionParticipationRepository) ListByAuction(auctionID uuid.UUID, limi
 	return parts, total, nil
 }
 
+func (r *AuctionParticipationRepository) ListByParticipant(participantID string, limit, offset int) ([]domain.AuctionParticipation, int64, error) {
+	var total int64
+	if err := r.db.Model(&domain.AuctionParticipation{}).Where("participant_id = ?", participantID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var parts []domain.AuctionParticipation
+	if err := r.db.Where("participant_id = ?", participantID).Order("created_at DESC").Limit(limit).Offset(offset).Find(&parts).Error; err != nil {
+		return nil, 0, err
+	}
+	return parts, total, nil
+}
+
 func (r *AuctionParticipationRepository) UpdateStatus(id uuid.UUID, status string) error {
 	return r.db.Model(&domain.AuctionParticipation{}).Where("id = ?", id).Update("status", status).Error
 }
