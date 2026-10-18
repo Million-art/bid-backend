@@ -3,9 +3,12 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -685,4 +688,158 @@ func generateNumericOTP(length int) string {
 		}
 	}
 	return result.String()
+}
+
+type GoogleTokenInfo struct {
+	Iss              string `json:"iss"`
+	Sub              string `json:"sub"`
+	Azp              string `json:"azp"`
+	Aud              string `json:"aud"`
+	Email            string `json:"email"`
+	EmailVerified    any    `json:"email_verified"`
+	Name             string `json:"name"`
+	Picture          string `json:"picture"`
+	GivenName        string `json:"given_name"`
+	FamilyName       string `json:"family_name"`
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+func (s *AuthService) VerifyGoogleToken(ctx context.Context, idToken string) (*GoogleTokenInfo, error) {
+	if strings.TrimSpace(idToken) == "" {
+		return nil, domain.NewAppError(400, "Google token is required", nil)
+	}
+
+	reqURL := "https://oauth2.googleapis.com/tokeninfo?id_token=" + url.QueryEscape(idToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to contact Google verification service: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, domain.NewAppError(401, "Invalid Google token", nil)
+	}
+
+	var info GoogleTokenInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("failed to decode Google token response: %w", err)
+	}
+
+	if info.Error != "" || info.ErrorDescription != "" {
+		return nil, domain.NewAppError(401, "Google token verification failed", nil)
+	}
+
+	// Validate issuer
+	if info.Iss != "accounts.google.com" && info.Iss != "https://accounts.google.com" {
+		return nil, domain.NewAppError(401, "Invalid Google token issuer", nil)
+	}
+
+	// Validate audience if client ID is configured
+	if s.config.GoogleClientID != "" && info.Aud != s.config.GoogleClientID && info.Azp != s.config.GoogleClientID {
+		return nil, domain.NewAppError(401, "Google token audience mismatch", nil)
+	}
+
+	info.Email = strings.TrimSpace(strings.ToLower(info.Email))
+	if info.Email == "" {
+		return nil, domain.NewAppError(400, "Google account has no associated email", nil)
+	}
+
+	return &info, nil
+}
+
+func (s *AuthService) GoogleLogin(ctx context.Context, idToken string, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
+	log := logger.FromContext(ctx)
+	info, err := s.VerifyGoogleToken(ctx, idToken)
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	user, err := s.userRepo.GetByEmail(info.Email)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		log.Error("auth.google_login.db_error", "email", maskEmail(info.Email), "error", err)
+		return "", "", nil, err
+	}
+
+	if errors.Is(err, domain.ErrNotFound) || user == nil {
+		name := strings.TrimSpace(info.Name)
+		if name == "" {
+			name = strings.Split(info.Email, "@")[0]
+		}
+
+		randBytes := make([]byte, 32)
+		_, _ = rand.Read(randBytes)
+		hashed, err := bcrypt.GenerateFromPassword(randBytes, bcrypt.DefaultCost)
+		if err != nil {
+			return "", "", nil, err
+		}
+
+		user = &domain.User{
+			ID:        uuid.New(),
+			FullName:  name,
+			Email:     info.Email,
+			Password:  string(hashed),
+			Phone:     "",
+			JoinedVia: "google",
+			Role:      domain.RoleParticipant,
+			Status:    domain.StatusActive,
+		}
+
+		if err := s.userRepo.Create(user); err != nil {
+			log.Error("auth.google_login.create_user_error", "email", maskEmail(info.Email), "error", err)
+			return "", "", nil, err
+		}
+
+		if s.participantRepo != nil {
+			_ = s.participantRepo.Create(&domain.ParticipantUser{
+				ID:        user.ID.String(),
+				Email:     user.Email,
+				FullName:  user.FullName,
+				Phone:     "",
+				Status:    "active",
+				CreatedAt: user.CreatedAt,
+				UpdatedAt: user.UpdatedAt,
+			})
+		}
+
+		_ = s.audit.Log(&domain.AuditLog{
+			UserID:   user.ID,
+			Action:   "USER_SIGNUP_GOOGLE",
+			Entity:   "user",
+			EntityID: user.ID.String(),
+			Metadata: map[string]interface{}{
+				"email": user.Email,
+				"role":  user.Role,
+			},
+		}, auditCtx)
+	} else {
+		if user.Status == domain.StatusSuspended {
+			return "", "", nil, domain.NewAppError(403, "Account is suspended", nil)
+		}
+
+		_ = s.audit.Log(&domain.AuditLog{
+			UserID:   user.ID,
+			Action:   "USER_LOGIN_GOOGLE",
+			Entity:   "user",
+			EntityID: user.ID.String(),
+		}, auditCtx)
+	}
+
+	accessToken, err := s.generateToken(user, s.config.JWTAccessSecret, 24*time.Hour, "access")
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	refreshToken, err := s.generateToken(user, s.config.JWTRefreshSecret, 30*24*time.Hour, "refresh")
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	return accessToken, refreshToken, user, nil
 }

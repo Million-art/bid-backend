@@ -41,6 +41,7 @@ type Config struct {
 	AppName                          string
 	SupportEmail                     string
 	ExposeDebugMetrics               bool
+	GoogleClientID                   string
 
 	// Chapa Payment Gateway
 	ChapaPublicKey     string
@@ -148,6 +149,7 @@ func LoadConfig() *Config {
 		AppName:                          getEnv("APP_NAME", "Carra Market"),
 		SupportEmail:                     getEnv("SUPPORT_EMAIL", "support@carramarket.com"),
 		ExposeDebugMetrics:               getEnvBool("EXPOSE_DEBUG_METRICS", false),
+		GoogleClientID:                   getEnv("GOOGLE_CLIENT_ID", "510278494876-bkmbkv9hfuelp0a5pv8lcqpd32ondgst.apps.googleusercontent.com"),
 		ChapaPublicKey:                   getEnv("CHAPA_PUBLIC_KEY", ""),
 		ChapaSecretKey:                   getEnv("CHAPA_SECRET_KEY", ""),
 		ChapaEncryptionKey:               getEnv("CHAPA_ENCRYPTION_KEY", ""),

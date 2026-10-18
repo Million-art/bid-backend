@@ -136,6 +136,7 @@ func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStora
 	auth := api.Group("/auth")
 	auth.Use(AuthRateLimit(limiterStorage))
 	auth.Post("/login", authHandler.Login)
+	auth.Post("/google", authHandler.GoogleLogin)
 	auth.Post("/signup", authHandler.Signup)
 	auth.Post("/send-otp", authHandler.SendOTP)
 	auth.Post("/verify-otp", authHandler.VerifyOTP)

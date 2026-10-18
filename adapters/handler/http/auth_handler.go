@@ -59,6 +59,12 @@ type ForgotPasswordRequest struct {
 	Email      string `json:"email"`
 }
 
+type GoogleLoginRequest struct {
+	Credential  string `json:"credential" validate:"required"`
+	IsSignup    bool   `json:"isSignup"`
+	AcceptTerms bool   `json:"acceptTerms"`
+}
+
 type ResetPasswordOTPRequest struct {
 	Identifier  string `json:"identifier"  validate:"required"`
 	OTP         string `json:"otp"         validate:"required,min=6,max=6"`
@@ -110,6 +116,48 @@ func (h *AuthHandler) Login(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "Login successful", fiber.Map{
+		"user":      user,
+		"csrfToken": csrfToken,
+	})
+}
+
+// @Summary Google Login or Signup
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body GoogleLoginRequest true "Google Credential"
+// @Router /api/auth/google [post]
+func (h *AuthHandler) GoogleLogin(c fiber.Ctx) error {
+	var req GoogleLoginRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(req.Credential) == "" {
+		return response.Error(c, fiber.StatusBadRequest, "Google credential is required", nil)
+	}
+
+	auditCtx := domain.AuditContext(GetAuditContext(c))
+	accessToken, refreshToken, user, err := h.authService.GoogleLogin(c.Context(), req.Credential, &auditCtx)
+	if err != nil {
+		Logger(c).Error("Google login failed", "error", err)
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusUnauthorized, "Google authentication failed", err)
+	}
+
+	h.setRefreshTokenCookie(c, refreshToken)
+	h.setAccessTokenCookie(c, accessToken)
+
+	csrfToken, err := IssueCSRF(c, h.config, JTIFromToken(accessToken))
+	if err != nil {
+		Logger(c).Error("Failed to issue CSRF token on Google login", "error", err)
+		return response.Error(c, fiber.StatusInternalServerError, "Login failed", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Google login successful", fiber.Map{
 		"user":      user,
 		"csrfToken": csrfToken,
 	})
