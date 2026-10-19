@@ -116,8 +116,9 @@ func (h *AuthHandler) Login(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "Login successful", fiber.Map{
-		"user":      user,
-		"csrfToken": csrfToken,
+		"user":        user,
+		"csrfToken":   csrfToken,
+		"accessToken": accessToken,
 	})
 }
 
@@ -158,8 +159,9 @@ func (h *AuthHandler) GoogleLogin(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "Google login successful", fiber.Map{
-		"user":      user,
-		"csrfToken": csrfToken,
+		"user":        user,
+		"csrfToken":   csrfToken,
+		"accessToken": accessToken,
 	})
 }
 
@@ -189,7 +191,8 @@ func (h *AuthHandler) Refresh(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "Token refreshed", fiber.Map{
-		"csrfToken": csrfToken,
+		"csrfToken":   csrfToken,
+		"accessToken": newAccessToken,
 	})
 }
 
@@ -418,8 +421,9 @@ func (h *AuthHandler) Signup(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusCreated, "Signup successful", fiber.Map{
-		"user":      user,
-		"csrfToken": csrfToken,
+		"user":        user,
+		"csrfToken":   csrfToken,
+		"accessToken": accessToken,
 	})
 }
 

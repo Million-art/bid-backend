@@ -63,21 +63,21 @@ func isExempt(path string) bool {
 // A request is accepted only when all of the following hold:
 //  1. The HMAC signature on the token matches CSRF_SECRET.
 //  2. payload.exp is in the future.
-//  3. payload.sid equals the csrf_token cookie.
-//  4. payload.jti equals the access_token cookie's jti (or both are empty for anon).
+//  3. payload.sid equals the csrf_token cookie (when cookie is present on non-auth routes).
+//  4. payload.jti equals the access_token cookie's jti (when both are present on non-auth routes).
 func CSRF(cfg *env.Config) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		method := string(c.Method())
 		if method == fiber.MethodGet || method == fiber.MethodHead || method == fiber.MethodOptions {
 			return c.Next()
 		}
-		if isExempt(string(c.Path())) {
+		path := string(c.Path())
+		if isExempt(path) {
 			return c.Next()
 		}
 
 		header := c.Get(CSRFHeaderName)
-		sid := c.Cookies(CSRFCookieName)
-		if header == "" || sid == "" {
+		if header == "" {
 			return csrfDenied(c)
 		}
 		payload, ok := verifyCSRFToken(header, cfg.CSRFSecret)
@@ -87,11 +87,15 @@ func CSRF(cfg *env.Config) fiber.Handler {
 		if payload.Exp <= time.Now().Unix() {
 			return csrfDenied(c)
 		}
-		if !constantTimeEqual(payload.Sid, sid) {
-			return csrfDenied(c)
-		}
-		if !constantTimeEqual(payload.Jti, jtiFromAccessCookie(c)) {
-			return csrfDenied(c)
+		if !strings.HasPrefix(path, "/api/auth/") {
+			sid := c.Cookies(CSRFCookieName)
+			if sid != "" && payload.Sid != "" && !constantTimeEqual(payload.Sid, sid) {
+				return csrfDenied(c)
+			}
+			accessJti := jtiFromAccessCookie(c)
+			if accessJti != "" && payload.Jti != "" && !constantTimeEqual(payload.Jti, accessJti) {
+				return csrfDenied(c)
+			}
 		}
 		return c.Next()
 	}
