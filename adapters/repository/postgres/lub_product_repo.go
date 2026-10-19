@@ -91,8 +91,13 @@ func (r *AuctionRepository) populateWinnerNames(auctions []domain.Auction) {
 	if len(auctions) == 0 {
 		return
 	}
+
+	auctionIDs := make([]uuid.UUID, 0, len(auctions))
 	idSet := make(map[string]struct{})
 	for _, a := range auctions {
+		if a.ID != uuid.Nil {
+			auctionIDs = append(auctionIDs, a.ID)
+		}
 		if a.WinnerParticipantID != nil {
 			pid := strings.TrimSpace(*a.WinnerParticipantID)
 			if pid != "" {
@@ -100,6 +105,28 @@ func (r *AuctionRepository) populateWinnerNames(auctions []domain.Auction) {
 			}
 		}
 	}
+
+	if len(auctionIDs) > 0 {
+		type bidCountRow struct {
+			AuctionID uuid.UUID `gorm:"column:auction_id"`
+			Total     int64     `gorm:"column:total"`
+		}
+		var countRows []bidCountRow
+		if err := r.db.Table("auction_bids").
+			Select("auction_id, COUNT(*) AS total").
+			Where("auction_id IN ?", auctionIDs).
+			Group("auction_id").
+			Scan(&countRows).Error; err == nil {
+			countMap := make(map[uuid.UUID]int64, len(countRows))
+			for _, cr := range countRows {
+				countMap[cr.AuctionID] = cr.Total
+			}
+			for i := range auctions {
+				auctions[i].TotalBids = countMap[auctions[i].ID]
+			}
+		}
+	}
+
 	if len(idSet) == 0 {
 		return
 	}
