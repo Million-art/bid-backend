@@ -35,6 +35,7 @@ type Service struct {
 	notificationSvc ports.NotificationService
 	log             *slog.Logger
 	pendingBids     sync.Map // map[string]domain.Money keyed by txRef
+	placedTxBids    sync.Map // map[string]bool keyed by txRef for idempotency
 }
 
 func NewService(
@@ -82,19 +83,23 @@ func (s *Service) resolveBidValue(txRef string, snap *VerifiedSnapshot) domain.M
 }
 
 func (s *Service) placeInitialBidIfNeeded(ctx context.Context, txRef string, auctionID uuid.UUID, participantID string, snap *VerifiedSnapshot) {
+	if _, alreadyPlaced := s.placedTxBids.Load(txRef); alreadyPlaced {
+		return
+	}
 	bidVal := s.resolveBidValue(txRef, snap)
 	if !bidVal.IsPositive() {
 		return
 	}
-	existingBids, err := s.lubSvc.ListMyBids(auctionID, participantID)
-	if err == nil && len(existingBids) > 0 {
-		s.pendingBids.Delete(txRef)
-		return
-	}
 	if _, err := s.lubSvc.PlaceBid(ctx, auctionID, participantID, bidVal); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			s.placedTxBids.Store(txRef, true)
+			s.pendingBids.Delete(txRef)
+			return
+		}
 		s.log.Warn("chapa_initial_bid_place_failed", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", participantID, "bid_value", bidVal.String(), "error", err)
 		return
 	}
+	s.placedTxBids.Store(txRef, true)
 	s.pendingBids.Delete(txRef)
 	s.log.Info("chapa_initial_bid_placed", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", participantID, "bid_value", bidVal.String())
 }

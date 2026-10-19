@@ -82,14 +82,14 @@ func (r *BidRepository) FindWinner(auctionID uuid.UUID) (*domain.Bid, error) {
 		SELECT id, participant_id, bid_value
 		FROM auction_bids
 		WHERE auction_id = ?
-		  AND id IN (
-		    SELECT MAX(id)
+		  AND bid_value IN (
+		    SELECT bid_value
 		    FROM auction_bids
 		    WHERE auction_id = ?
 		    GROUP BY bid_value
 		    HAVING COUNT(DISTINCT participant_id) = 1
 		  )
-		ORDER BY bid_value ASC
+		ORDER BY bid_value ASC, placed_at ASC
 		LIMIT 1
 	`, auctionID, auctionID).Scan(&row).Error
 	if err != nil {

@@ -142,27 +142,9 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		bidMoney = domain.NewMoney(req.BidValue)
 	}
 
-	a, err := h.svc.ValidateAuctionAndBid(auctionID, bidMoney)
+	a, err := h.svc.ValidateAuctionAndBid(auctionID, participantID, bidMoney)
 	if err != nil {
 		return mapLUBError(c, err)
-	}
-
-	// Check if participant has already paid the entrance fee for this auction
-	if existingPart, _ := h.svc.GetParticipation(auctionID, participantID); existingPart != nil && existingPart.Status == domain.ParticipationStatusActive {
-		var placedBid *domain.Bid
-		if bidMoney.IsPositive() {
-			if existingBids, bErr := h.svc.ListMyBids(auctionID, participantID); bErr == nil && len(existingBids) == 0 {
-				placedBid, err = h.svc.PlaceBid(c.Context(), auctionID, participantID, bidMoney)
-				if err != nil {
-					return mapLUBError(c, err)
-				}
-			}
-		}
-		return response.Success(c, fiber.StatusOK, "Already participating", fiber.Map{
-			"participating": true,
-			"participation": existingPart,
-			"bid":           placedBid,
-		})
 	}
 
 	if h.chapaClient == nil || h.chapaPaymentSvc == nil {

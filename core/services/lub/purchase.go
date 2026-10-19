@@ -191,8 +191,8 @@ func (s *Service) RefundParticipation(ctx context.Context, participationID uuid.
 
 // ---------------------- Bid management ----------------------
 
-// ValidateAuctionAndBid checks that the auction is open for bidding and (if bidValue > 0) the bid value is valid.
-func (s *Service) ValidateAuctionAndBid(auctionID uuid.UUID, bidValue domain.Money) (*domain.Auction, error) {
+// ValidateAuctionAndBid checks that the auction is open for bidding and (if bidValue > 0) the bid value is valid and not a duplicate for this participant.
+func (s *Service) ValidateAuctionAndBid(auctionID uuid.UUID, participantID string, bidValue domain.Money) (*domain.Auction, error) {
 	a, err := s.auctionRepo.GetByID(auctionID)
 	if err != nil {
 		return nil, err
@@ -204,12 +204,17 @@ func (s *Service) ValidateAuctionAndBid(auctionID uuid.UUID, bidValue domain.Mon
 		if err := s.validateBidValue(a, bidValue); err != nil {
 			return nil, err
 		}
+		if participantID != "" {
+			if existing, _ := s.bidRepo.GetByAuctionAndParticipantAndValue(auctionID, participantID, bidValue); existing != nil {
+				return nil, domain.NewAppError(409, "You already have a bid with that value", nil)
+			}
+		}
 	}
 	return a, nil
 }
 
 // PlaceBid places a new secret bid for a participant.
-// Each participant can place one initial bid per auction and update it once.
+// Each bid placed can be updated at most once.
 func (s *Service) PlaceBid(
 	ctx context.Context,
 	auctionID uuid.UUID,
@@ -230,12 +235,8 @@ func (s *Service) PlaceBid(
 		return nil, err
 	}
 
-	existingBids, err := s.bidRepo.ListByAuctionAndParticipant(auctionID, participantID)
-	if err != nil {
-		return nil, err
-	}
-	if len(existingBids) > 0 {
-		return nil, domain.NewAppError(409, "You have already placed a bid on this auction. You can update your existing bid once.", nil)
+	if existing, _ := s.bidRepo.GetByAuctionAndParticipantAndValue(auctionID, participantID, bidValue); existing != nil {
+		return nil, domain.NewAppError(409, "You already have a bid with that value", nil)
 	}
 
 	now := time.Now().UTC().Truncate(time.Microsecond)

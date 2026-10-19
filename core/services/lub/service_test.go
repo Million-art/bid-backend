@@ -89,6 +89,9 @@ func (m *mockPartRepo) ListByAuction(auctionID uuid.UUID, l, o int) ([]domain.Au
 	}
 	return nil, 0, nil
 }
+func (m *mockPartRepo) ListByParticipant(participantID string, l, o int) ([]domain.AuctionParticipation, int64, error) {
+	return nil, 0, nil
+}
 func (m *mockPartRepo) UpdateStatus(id uuid.UUID, s string) error {
 	if m.updateStatusFn != nil {
 		return m.updateStatusFn(id, s)

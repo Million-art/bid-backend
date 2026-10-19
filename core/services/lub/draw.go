@@ -35,15 +35,15 @@ func (s *Service) ExecuteDraw(ctx context.Context, auctionID uuid.UUID, trigger 
 		return nil, domain.NewAppError(422, fmt.Sprintf("Auction status %q does not allow draw execution", a.Status), nil)
 	}
 
+	winningBid, err := s.bidRepo.FindWinner(auctionID)
+	if err != nil {
+		return nil, fmt.Errorf("draw: find winner: %w", err)
+	}
+
 	if a.Status != domain.AuctionStatusClosed {
 		if err := s.auctionRepo.UpdateStatus(auctionID, domain.AuctionStatusClosed); err != nil {
 			return nil, err
 		}
-	}
-
-	winningBid, err := s.bidRepo.FindWinner(auctionID)
-	if err != nil {
-		return nil, fmt.Errorf("draw: find winner: %w", err)
 	}
 
 	result := &DrawResult{}
