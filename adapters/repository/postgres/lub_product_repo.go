@@ -32,6 +32,9 @@ func (r *AuctionRepository) GetByID(id uuid.UUID) (*domain.Auction, error) {
 		}
 		return nil, err
 	}
+	slice := []domain.Auction{a}
+	r.populateWinnerNames(slice)
+	a = slice[0]
 	return &a, nil
 }
 
@@ -60,6 +63,7 @@ func (r *AuctionRepository) List(status, search string, limit, offset int) ([]do
 	if err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&auctions).Error; err != nil {
 		return nil, 0, err
 	}
+	r.populateWinnerNames(auctions)
 	return auctions, total, nil
 }
 
@@ -79,7 +83,67 @@ func (r *AuctionRepository) ListPublic(limit, offset int) ([]domain.Auction, int
 	if err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&auctions).Error; err != nil {
 		return nil, 0, err
 	}
+	r.populateWinnerNames(auctions)
 	return auctions, total, nil
+}
+
+func (r *AuctionRepository) populateWinnerNames(auctions []domain.Auction) {
+	if len(auctions) == 0 {
+		return
+	}
+	idSet := make(map[string]struct{})
+	for _, a := range auctions {
+		if a.WinnerParticipantID != nil {
+			pid := strings.TrimSpace(*a.WinnerParticipantID)
+			if pid != "" {
+				idSet[pid] = struct{}{}
+			}
+		}
+	}
+	if len(idSet) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+
+	nameByID := make(map[string]string, len(ids))
+
+	type idNameRow struct {
+		ID       string `gorm:"column:id"`
+		FullName string `gorm:"column:full_name"`
+	}
+
+	var userRows []idNameRow
+	if err := r.db.Table("users").Select("id, full_name").Where("id IN ?", ids).Scan(&userRows).Error; err == nil {
+		for _, row := range userRows {
+			if n := strings.TrimSpace(row.FullName); n != "" {
+				nameByID[strings.ToLower(strings.TrimSpace(row.ID))] = n
+			}
+		}
+	}
+
+	var partRows []idNameRow
+	if err := r.db.Table("participant_users").Select("id, full_name").Where("id IN ?", ids).Scan(&partRows).Error; err == nil {
+		for _, row := range partRows {
+			key := strings.ToLower(strings.TrimSpace(row.ID))
+			if _, exists := nameByID[key]; !exists {
+				if n := strings.TrimSpace(row.FullName); n != "" {
+					nameByID[key] = n
+				}
+			}
+		}
+	}
+
+	for i := range auctions {
+		if auctions[i].WinnerParticipantID != nil {
+			key := strings.ToLower(strings.TrimSpace(*auctions[i].WinnerParticipantID))
+			if name, ok := nameByID[key]; ok {
+				auctions[i].WinnerName = name
+			}
+		}
+	}
 }
 
 func (r *AuctionRepository) ListDueForClose() ([]domain.Auction, error) {

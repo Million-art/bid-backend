@@ -44,6 +44,7 @@ type Auction struct {
 	WinnerBidID         *uuid.UUID `gorm:"type:uuid;index:idx_auctions_winner_bid"         json:"winnerBidId,omitempty"`
 	WinnerParticipantID *string    `gorm:"type:uuid;index:idx_auctions_winner_participant" json:"winnerParticipantId,omitempty"`
 	WinnerBidValue      *Money     `gorm:"type:decimal(10,2)"                              json:"winnerBidValue,omitempty"`
+	WinnerName          string     `gorm:"-"                                               json:"winnerName,omitempty"`
 
 	CreatedBy uuid.UUID `gorm:"type:uuid;not null;index:idx_auctions_created_by" json:"createdBy"`
 	CreatedAt time.Time `gorm:"index:idx_auctions_created_at"                    json:"createdAt"`

@@ -94,6 +94,7 @@ func (h *AuctionHandler) GetPublicAuction(c fiber.Ctx) error {
 		a.WinnerBidID = nil
 		a.WinnerParticipantID = nil
 		a.WinnerBidValue = nil
+		a.WinnerName = ""
 	}
 	return response.Success(c, fiber.StatusOK, "Auction found", a)
 }
