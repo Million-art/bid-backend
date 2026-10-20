@@ -97,6 +97,9 @@ func (s *Service) ActivateAuction(ctx context.Context, id uuid.UUID, actorID uui
 		return err
 	}
 	s.logAudit(actorID, "auction.activated", "auction", id.String(), a.Title)
+	s.notify(func() error {
+		return s.notificationSvc.NotifyAuctionActivated(ctx, id, a.Title)
+	})
 	return nil
 }
 
@@ -124,6 +127,9 @@ func (s *Service) PostponeAuction(ctx context.Context, id uuid.UUID, newCloseAt 
 	}
 	s.logAudit(actorID, "auction.postponed", "auction", id.String(),
 		fmt.Sprintf("new_close_at=%s", nc.Format(time.RFC3339)))
+	s.notify(func() error {
+		return s.notificationSvc.NotifyAuctionPostponed(ctx, id, a.Title, nc.Format(time.RFC3339))
+	})
 	return nil
 }
 
@@ -143,6 +149,9 @@ func (s *Service) CancelAuction(ctx context.Context, id uuid.UUID, actorID uuid.
 		return err
 	}
 	s.logAudit(actorID, "auction.cancelled", "auction", id.String(), a.Title)
+	s.notify(func() error {
+		return s.notificationSvc.NotifyAuctionCancelled(ctx, id, a.Title, "")
+	})
 	return nil
 }
 
@@ -262,6 +271,9 @@ func (s *Service) PlaceBid(
 		return nil, err
 	}
 	bid.PopulateUpdateState()
+	s.notify(func() error {
+		return s.notificationSvc.NotifyBidPlaced(ctx, participantID, auctionID, a.Title, bidValue)
+	})
 	return bid, nil
 }
 
@@ -307,12 +319,16 @@ func (s *Service) UpdateBid(
 	if !now.After(bid.PlacedAt.Add(100 * time.Millisecond)) {
 		now = bid.PlacedAt.Add(time.Second)
 	}
+	oldValue := bid.BidValue
 	bid.BidValue = newBidValue
 	bid.UpdatedAt = now
 	if err := s.bidRepo.Update(bid); err != nil {
 		return nil, err
 	}
 	bid.PopulateUpdateState()
+	s.notify(func() error {
+		return s.notificationSvc.NotifyBidUpdated(ctx, participantID, bid.AuctionID, a.Title, oldValue, newBidValue)
+	})
 	return bid, nil
 }
 

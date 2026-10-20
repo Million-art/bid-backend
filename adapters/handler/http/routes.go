@@ -79,12 +79,12 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	app.Get("/metrics", PrometheusHandler)
 
 	smsService := sms.NewAfroMessageService(cfg)
-	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, cacheRepo, emailService, smsService)
 
 	// Auction (Lowest Unique Bid) setup
 	auctionRepo := postgres.NewAuctionRepository(db)
 	participationRepo := postgres.NewAuctionParticipationRepository(db)
 	bidRepo := postgres.NewBidRepository(db)
+	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, participationRepo, cacheRepo, emailService, smsService)
 	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService)
 	chapaPaymentSvc := chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)

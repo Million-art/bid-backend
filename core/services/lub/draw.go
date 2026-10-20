@@ -52,6 +52,9 @@ func (s *Service) ExecuteDraw(ctx context.Context, auctionID uuid.UUID, trigger 
 		s.logAudit(actorID, "auction.draw.no_winner",
 			"auction", auctionID.String(),
 			fmt.Sprintf("trigger=%s, no unique bid found", trigger))
+		s.notify(func() error {
+			return s.notificationSvc.NotifyAuctionNoWinner(ctx, auctionID, a.Title)
+		})
 		return result, nil
 	}
 
@@ -80,6 +83,10 @@ func (s *Service) ExecuteDraw(ctx context.Context, auctionID uuid.UUID, trigger 
 		fmt.Sprintf("trigger=%s winner=%s bid_value=%.2f",
 			trigger, winningBid.ParticipantID, winningBid.BidValue.Float64()))
 
+	s.notify(func() error {
+		return s.notificationSvc.NotifyAuctionWinner(ctx, winningBid.ParticipantID, auctionID, a.Title, winningBid.BidValue)
+	})
+
 	return result, nil
 }
 
@@ -96,6 +103,9 @@ func (s *Service) CloseAuction(ctx context.Context, auctionID uuid.UUID, actorID
 		return err
 	}
 	s.logAudit(actorID, "auction.closed", "auction", auctionID.String(), a.Title)
+	s.notify(func() error {
+		return s.notificationSvc.NotifyAuctionClosed(ctx, auctionID, a.Title)
+	})
 	return nil
 }
 

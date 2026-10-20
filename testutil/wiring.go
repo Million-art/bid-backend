@@ -35,7 +35,7 @@ func NewStack(t testing.TB, pg *PG) *Stack {
 	auditRepo := postgres.NewAuditLogRepository(db)
 
 	auditSvc := services.NewAuditLogService(auditRepo)
-	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, nil, nil, nil)
+	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, participationRepo, nil, nil, nil)
 
 	lubSvc := lub.NewService(
 		auctionRepo,

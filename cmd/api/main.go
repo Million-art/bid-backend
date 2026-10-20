@@ -17,6 +17,7 @@ import (
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/bid-hub/admin-backend/core/services"
 	"github.com/bid-hub/admin-backend/core/services/lub"
+	"github.com/bid-hub/admin-backend/core/services/notifications"
 	"github.com/bid-hub/admin-backend/platform/cache"
 	"github.com/bid-hub/admin-backend/platform/database"
 	"github.com/bid-hub/admin-backend/platform/env"
@@ -339,7 +340,11 @@ func processDueProducts(ctx context.Context, db *gorm.DB) error {
 	bidRepo := postgres.NewBidRepository(db)
 	auditRepo := postgres.NewAuditLogRepository(db)
 	auditSvc := services.NewAuditLogService(auditRepo)
-	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, nil)
+	notificationRepo := postgres.NewNotificationRepository(db)
+	userRepo := postgres.NewUserRepository(db)
+	participantUserRepo := postgres.NewParticipantUserRepository(db)
+	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, partRepo, nil, nil, nil)
+	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, notifSvc)
 	return lubSvc.ProcessDueAuctions(ctx)
 }
 

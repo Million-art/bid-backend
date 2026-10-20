@@ -209,10 +209,7 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 	}
 
 	s.placeInitialBidIfNeeded(ctx, txRef, auctionID, userID.String(), snap)
-
-	if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, userID.String(), auctionID, "", pricePaid); err != nil {
-		s.log.Error("failed to send participation notification", "tx_ref", txRef, "user_id", userID, "error", err)
-	}
+	s.notifyParticipationConfirmed(ctx, txRef, userID.String(), auctionID, pricePaid)
 
 	if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 		s.log.Error("chapa_mark_processed_failed", "tx_ref", txRef, "error", err)
@@ -220,6 +217,19 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 	}
 	s.log.Info("chapa_fulfillment_complete", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", userID.String())
 	return nil
+}
+
+func (s *Service) notifyParticipationConfirmed(ctx context.Context, txRef, participantID string, auctionID uuid.UUID, feePaid domain.Money) {
+	if s.notificationSvc == nil {
+		return
+	}
+	auctionTitle := ""
+	if a, aErr := s.lubSvc.GetAuctionByID(auctionID); aErr == nil && a != nil {
+		auctionTitle = a.Title
+	}
+	if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, participantID, auctionID, auctionTitle, feePaid); err != nil {
+		s.log.Error("failed to send participation notification", "tx_ref", txRef, "user_id", participantID, "error", err)
+	}
 }
 
 func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool {
@@ -254,6 +264,7 @@ func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool
 		}
 	}
 	s.placeInitialBidIfNeeded(ctx, txRef, *p.AuctionID, p.UserID.String(), nil)
+	s.notifyParticipationConfirmed(ctx, txRef, p.UserID.String(), *p.AuctionID, p.Amount)
 	if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 		s.log.Error("chapa_retry_mark_processed_failed", "tx_ref", txRef, "error", err)
 		return false

@@ -33,10 +33,16 @@ type Notification struct {
 // Notification types
 const (
 	NotificationTypeParticipationConfirmed = "participation_confirmed"
+	NotificationTypeBidPlaced              = "bid_placed"
+	NotificationTypeBidUpdated             = "bid_updated"
 	NotificationTypeAuctionWinner          = "auction_winner"
+	NotificationTypeAuctionNoWinner        = "auction_no_winner"
+	NotificationTypeAuctionActivated       = "auction_activated"
 	NotificationTypeAuctionClosed          = "auction_closed"
 	NotificationTypeAuctionPostponed       = "auction_postponed"
 	NotificationTypeAuctionCancelled       = "auction_cancelled"
+	NotificationTypePaymentSuccess         = "payment_success"
+	NotificationTypePaymentFailed          = "payment_failed"
 	NotificationTypeRefundCompleted        = "refund_completed"
 	NotificationTypeLegalDocumentUpdated   = "legal_document_updated"
 )

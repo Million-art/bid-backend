@@ -21,6 +21,18 @@ func (r *NotificationRepo) CreateBatch(items []*domain.Notification) error {
 	if len(items) == 0 {
 		return nil
 	}
+	for _, n := range items {
+		if n == nil {
+			continue
+		}
+		// PostgreSQL jsonb rejects empty string; use "{}" when Metadata is empty
+		if n.Metadata == "" {
+			n.Metadata = "{}"
+		}
+		if n.ID == uuid.Nil {
+			n.ID = uuid.New()
+		}
+	}
 	return r.db.CreateInBatches(items, 100).Error
 }
 
