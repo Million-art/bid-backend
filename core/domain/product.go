@@ -57,3 +57,26 @@ type Auction struct {
 }
 
 func (Auction) TableName() string { return "auctions" }
+
+// AuctionAuditEntry represents one distinct bid value in an executed auction's public audit log.
+type AuctionAuditEntry struct {
+	BidValue Money `json:"bidValue"`
+	Count    int   `json:"count"`
+	IsUnique bool  `json:"isUnique"`
+	IsWinner bool  `json:"isWinner"`
+}
+
+// AuctionAudit represents the published public audit results of a completed auction.
+type AuctionAudit struct {
+	AuctionID           uuid.UUID           `json:"auctionId"`
+	Title               string              `json:"title"`
+	Status              AuctionStatus       `json:"status"`
+	WinnerBidValue      *Money              `json:"winnerBidValue,omitempty"`
+	WinnerName          string              `json:"winnerName,omitempty"`
+	TotalBids           int64               `json:"totalBids"`
+	UniqueBidsCount     int                 `json:"uniqueBidsCount"`
+	DuplicatedBidsCount int                 `json:"duplicatedBidsCount"`
+	MinBidValue         Money               `json:"minBidValue"`
+	MaxBidValue         *Money              `json:"maxBidValue,omitempty"`
+	Entries             []AuctionAuditEntry `json:"entries"`
+}

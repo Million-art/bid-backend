@@ -99,6 +99,18 @@ func (h *AuctionHandler) GetPublicAuction(c fiber.Ctx) error {
 	return response.Success(c, fiber.StatusOK, "Auction found", a)
 }
 
+func (h *AuctionHandler) GetAuctionAudit(c fiber.Ctx) error {
+	id, err := PathParamUUID(c, "id", "id")
+	if err != nil {
+		return err
+	}
+	audit, err := h.svc.GetAuctionAudit(id)
+	if err != nil {
+		return mapLUBError(c, err)
+	}
+	return response.Success(c, fiber.StatusOK, "Auction audit retrieved", audit)
+}
+
 func formatChapaPhone(raw string) string {
 	digits := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(raw), "+", ""), " ", "")
 	if strings.HasPrefix(digits, "251") && len(digits) == 12 {
