@@ -27,6 +27,7 @@ type Auction struct {
 	Title       string        `gorm:"type:varchar(255);not null"                     json:"title"`
 	Description string        `gorm:"type:text"                                      json:"description"`
 	ImageURL    string        `gorm:"type:text"                                      json:"imageUrl,omitempty"`
+	ImageURLs   []string      `gorm:"type:jsonb;serializer:json"                      json:"imageUrls,omitempty"`
 	VideoURL    string        `gorm:"type:text"                                      json:"videoUrl,omitempty"`
 	Status      AuctionStatus `gorm:"type:auction_status;not null;default:'draft';index:idx_auctions_status;index:idx_auctions_due_close,priority:1" json:"status"`
 

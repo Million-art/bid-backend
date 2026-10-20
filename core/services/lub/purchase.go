@@ -40,8 +40,18 @@ func (s *Service) UpdateAuction(ctx context.Context, id uuid.UUID, updates *doma
 	if updates.Description != "" {
 		a.Description = updates.Description
 	}
-	if updates.ImageURL != "" {
+	if updates.ImageURLs != nil {
+		a.ImageURLs = updates.ImageURLs
+		if len(a.ImageURLs) > 0 {
+			a.ImageURL = a.ImageURLs[0]
+		} else {
+			a.ImageURL = ""
+		}
+	} else if updates.ImageURL != "" {
 		a.ImageURL = updates.ImageURL
+		if len(a.ImageURLs) == 0 {
+			a.ImageURLs = []string{updates.ImageURL}
+		}
 	}
 	if updates.VideoURL != "" {
 		a.VideoURL = updates.VideoURL

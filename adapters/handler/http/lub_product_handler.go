@@ -27,6 +27,7 @@ type CreateAuctionRequest struct {
 	Name        string   `json:"name"        validate:"omitempty,min=2,max=255"`
 	Description string   `json:"description" validate:"omitempty"`
 	ImageURL    string   `json:"imageUrl"    validate:"omitempty,url"`
+	ImageURLs   []string `json:"imageUrls"   validate:"omitempty,dive,url"`
 	VideoURL    string   `json:"videoUrl"    validate:"omitempty,url"`
 	EntranceFee float64  `json:"entranceFee" validate:"required,gt=0"`
 	MinBidValue float64  `json:"minBidValue" validate:"omitempty,gt=0"`
@@ -40,12 +41,37 @@ type UpdateAuctionRequest struct {
 	Name        string   `json:"name"        validate:"omitempty,min=2,max=255"`
 	Description string   `json:"description" validate:"omitempty"`
 	ImageURL    string   `json:"imageUrl"    validate:"omitempty"`
+	ImageURLs   []string `json:"imageUrls"   validate:"omitempty"`
 	VideoURL    string   `json:"videoUrl"    validate:"omitempty"`
 	EntranceFee float64  `json:"entranceFee" validate:"omitempty,gt=0"`
 	MinBidValue float64  `json:"minBidValue" validate:"omitempty,gt=0"`
 	MaxBidValue *float64 `json:"maxBidValue" validate:"omitempty,gt=0"`
 	StartAt     *string  `json:"startAt"     validate:"omitempty"`
 	CloseAt     *string  `json:"closeAt"     validate:"omitempty"`
+}
+
+func normalizeAuctionImages(cover string, urls []string) (string, []string) {
+	seen := make(map[string]struct{}, len(urls)+1)
+	out := make([]string, 0, len(urls)+1)
+	add := func(raw string) {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	add(cover)
+	for _, u := range urls {
+		add(u)
+	}
+	if len(out) == 0 {
+		return "", []string{}
+	}
+	return out[0], out
 }
 
 type PostponeAuctionRequest struct {
@@ -75,10 +101,12 @@ func (h *AuctionAdminHandler) Create(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "title is required (min 2 chars)", nil)
 	}
 
+	cover, images := normalizeAuctionImages(req.ImageURL, req.ImageURLs)
 	a := &domain.Auction{
 		Title:       title,
 		Description: req.Description,
-		ImageURL:    req.ImageURL,
+		ImageURL:    cover,
+		ImageURLs:   images,
 		VideoURL:    req.VideoURL,
 		EntranceFee: domain.NewMoney(req.EntranceFee),
 		MinBidValue: domain.NewMoney(req.MinBidValue),
@@ -160,10 +188,12 @@ func (h *AuctionAdminHandler) Update(c fiber.Ctx) error {
 		title = strings.TrimSpace(req.Name)
 	}
 
+	cover, images := normalizeAuctionImages(req.ImageURL, req.ImageURLs)
 	updates := &domain.Auction{
 		Title:       title,
 		Description: req.Description,
-		ImageURL:    req.ImageURL,
+		ImageURL:    cover,
+		ImageURLs:   images,
 		VideoURL:    req.VideoURL,
 		EntranceFee: domain.NewMoney(req.EntranceFee),
 		MinBidValue: domain.NewMoney(req.MinBidValue),
