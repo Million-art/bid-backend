@@ -65,6 +65,16 @@ type GoogleLoginRequest struct {
 	AcceptTerms bool   `json:"acceptTerms"`
 }
 
+type TelegramLoginRequest struct {
+	ID        int64  `json:"id" validate:"required"`
+	FirstName string `json:"first_name" validate:"required"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+	PhotoURL  string `json:"photo_url"`
+	AuthDate  int64  `json:"auth_date" validate:"required"`
+	Hash      string `json:"hash" validate:"required"`
+}
+
 type ResetPasswordOTPRequest struct {
 	Identifier  string `json:"identifier"  validate:"required"`
 	OTP         string `json:"otp"         validate:"required,min=6,max=6"`
@@ -163,6 +173,67 @@ func (h *AuthHandler) GoogleLogin(c fiber.Ctx) error {
 		"csrfToken":   csrfToken,
 		"accessToken": accessToken,
 	})
+}
+
+// @Summary Telegram Login or Signup
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body TelegramLoginRequest true "Telegram Login Widget payload"
+// @Router /api/auth/telegram [post]
+func (h *AuthHandler) TelegramLogin(c fiber.Ctx) error {
+	var req TelegramLoginRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+
+	auditCtx := domain.AuditContext(GetAuditContext(c))
+	accessToken, refreshToken, user, err := h.authService.TelegramLogin(c.Context(), services.TelegramAuthPayload{
+		ID:        req.ID,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		Username:  req.Username,
+		PhotoURL:  req.PhotoURL,
+		AuthDate:  req.AuthDate,
+		Hash:      req.Hash,
+	}, &auditCtx)
+	if err != nil {
+		Logger(c).Error("Telegram login failed", "error", err)
+		var appErr *domain.AppError
+		if errors.As(err, &appErr) {
+			return response.Error(c, appErr.Code, appErr.Message, nil)
+		}
+		return response.Error(c, fiber.StatusUnauthorized, "Telegram authentication failed", err)
+	}
+
+	h.setRefreshTokenCookie(c, refreshToken)
+	h.setAccessTokenCookie(c, accessToken)
+
+	csrfToken, err := IssueCSRF(c, h.config, JTIFromToken(accessToken))
+	if err != nil {
+		Logger(c).Error("Failed to issue CSRF token on Telegram login", "error", err)
+		return response.Error(c, fiber.StatusInternalServerError, "Login failed", err)
+	}
+
+	return response.Success(c, fiber.StatusOK, "Telegram login successful", fiber.Map{
+		"user":        user,
+		"csrfToken":   csrfToken,
+		"accessToken": accessToken,
+	})
+}
+
+// PublicAuthConfig returns which social login providers are available (no secrets).
+func (h *AuthHandler) PublicAuthConfig(c fiber.Ctx) error {
+	out := fiber.Map{
+		"googleEnabled":   strings.TrimSpace(h.config.GoogleClientID) != "",
+		"telegramEnabled": h.authService.TelegramEnabled(),
+	}
+	if h.authService.TelegramEnabled() {
+		if username, err := h.authService.TelegramBotUsername(c.Context()); err == nil && username != "" {
+			out["telegramBotUsername"] = username
+		}
+	}
+	return response.Success(c, fiber.StatusOK, "Auth config", out)
 }
 
 // @Summary Refresh token

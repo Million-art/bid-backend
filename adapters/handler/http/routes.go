@@ -112,7 +112,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	}
 	mediaPresignHandler := NewMediaPresignHandler(r2PresignService, cfg.MaxUploadSizeMB)
 
-	registerPublicRoutes(api, legalDocHandler, limiterStorage, cfg)
+	registerPublicRoutes(api, legalDocHandler, authHandler, limiterStorage, cfg)
 	registerAuthRoutes(api, authHandler, limiterStorage)
 
 	optionalAuth := OptionalAuthMiddleware(authService, cfg.JWTAccessSecret, cacheRepo)
@@ -128,8 +128,9 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	return nil
 }
 
-func registerPublicRoutes(api fiber.Router, legalDocHandler *LegalDocumentHandler, limiterStorage fiber.Storage, cfg *env.Config) {
+func registerPublicRoutes(api fiber.Router, legalDocHandler *LegalDocumentHandler, authHandler *AuthHandler, limiterStorage fiber.Storage, cfg *env.Config) {
 	api.Get("/public/legal/:docType", legalDocHandler.PublicGet)
+	api.Get("/public/auth-config", authHandler.PublicAuthConfig)
 }
 
 func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStorage fiber.Storage) {
@@ -137,6 +138,7 @@ func registerAuthRoutes(api fiber.Router, authHandler *AuthHandler, limiterStora
 	auth.Use(AuthRateLimit(limiterStorage))
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/google", authHandler.GoogleLogin)
+	auth.Post("/telegram", authHandler.TelegramLogin)
 	auth.Post("/signup", authHandler.Signup)
 	auth.Post("/send-otp", authHandler.SendOTP)
 	auth.Post("/verify-otp", authHandler.VerifyOTP)

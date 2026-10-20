@@ -42,6 +42,8 @@ type Config struct {
 	SupportEmail                     string
 	ExposeDebugMetrics               bool
 	GoogleClientID                   string
+	TelegramBotToken                 string // BOT_TOKEN or TELEGRAM_BOT_TOKEN
+	TelegramBotUsername              string // optional; resolved via getMe when empty
 
 	// Chapa Payment Gateway
 	ChapaPublicKey     string
@@ -150,6 +152,8 @@ func LoadConfig() *Config {
 		SupportEmail:                     getEnv("SUPPORT_EMAIL", "support@carramarket.com"),
 		ExposeDebugMetrics:               getEnvBool("EXPOSE_DEBUG_METRICS", false),
 		GoogleClientID:                   getEnv("GOOGLE_CLIENT_ID", "510278494876-bkmbkv9hfuelp0a5pv8lcqpd32ondgst.apps.googleusercontent.com"),
+		TelegramBotToken:                 getEnvFallback("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", ""),
+		TelegramBotUsername:              strings.TrimPrefix(getEnvFallback("TELEGRAM_BOT_USERNAME", "BOT_USERNAME", ""), "@"),
 		ChapaPublicKey:                   getEnv("CHAPA_PUBLIC_KEY", ""),
 		ChapaSecretKey:                   getEnv("CHAPA_SECRET_KEY", ""),
 		ChapaEncryptionKey:               getEnv("CHAPA_ENCRYPTION_KEY", ""),

@@ -2,14 +2,21 @@ package services
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
@@ -29,6 +36,10 @@ type AuthService struct {
 	cache           ports.CacheRepository
 	sms             ports.SmsService
 	config          *env.Config
+
+	tgBotUsernameOnce sync.Once
+	tgBotUsername     string
+	tgBotUsernameErr  error
 }
 
 func NewAuthService(userRepo ports.UserRepository, participantRepo ports.ParticipantUserRepository, audit ports.AuditLogService, email ports.EmailService, cache ports.CacheRepository, sms ports.SmsService, config *env.Config) *AuthService {
@@ -826,6 +837,236 @@ func (s *AuthService) GoogleLogin(ctx context.Context, idToken string, auditCtx 
 		_ = s.audit.Log(&domain.AuditLog{
 			UserID:   user.ID,
 			Action:   "USER_LOGIN_GOOGLE",
+			Entity:   "user",
+			EntityID: user.ID.String(),
+		}, auditCtx)
+	}
+
+	accessToken, err := s.generateToken(user, s.config.JWTAccessSecret, 24*time.Hour, "access")
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	refreshToken, err := s.generateToken(user, s.config.JWTRefreshSecret, 30*24*time.Hour, "refresh")
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	return accessToken, refreshToken, user, nil
+}
+
+// TelegramAuthPayload is the Login Widget callback payload.
+type TelegramAuthPayload struct {
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+	PhotoURL  string `json:"photo_url"`
+	AuthDate  int64  `json:"auth_date"`
+	Hash      string `json:"hash"`
+}
+
+const telegramAuthMaxAge = 24 * time.Hour
+
+// TelegramEnabled reports whether BOT_TOKEN is configured.
+func (s *AuthService) TelegramEnabled() bool {
+	return s.config != nil && strings.TrimSpace(s.config.TelegramBotToken) != ""
+}
+
+// TelegramBotUsername returns the bot username for the Login Widget.
+// Uses TELEGRAM_BOT_USERNAME when set; otherwise resolves via Telegram getMe.
+func (s *AuthService) TelegramBotUsername(ctx context.Context) (string, error) {
+	if !s.TelegramEnabled() {
+		return "", domain.NewAppError(503, "Telegram login is not configured", nil)
+	}
+	if u := strings.TrimPrefix(strings.TrimSpace(s.config.TelegramBotUsername), "@"); u != "" {
+		return u, nil
+	}
+
+	s.tgBotUsernameOnce.Do(func() {
+		s.tgBotUsername, s.tgBotUsernameErr = s.fetchTelegramBotUsername(ctx)
+	})
+	if s.tgBotUsernameErr != nil {
+		return "", s.tgBotUsernameErr
+	}
+	return s.tgBotUsername, nil
+}
+
+func (s *AuthService) fetchTelegramBotUsername(ctx context.Context) (string, error) {
+	token := strings.TrimSpace(s.config.TelegramBotToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telegram.org/bot"+token+"/getMe", nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("telegram getMe failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Username string `json:"username"`
+		} `json:"result"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("telegram getMe decode: %w", err)
+	}
+	if !parsed.OK || strings.TrimSpace(parsed.Result.Username) == "" {
+		msg := strings.TrimSpace(parsed.Description)
+		if msg == "" {
+			msg = "invalid bot token"
+		}
+		return "", domain.NewAppError(503, "Telegram bot lookup failed: "+msg, nil)
+	}
+	return strings.TrimPrefix(parsed.Result.Username, "@"), nil
+}
+
+// VerifyTelegramLogin validates the Telegram Login Widget HMAC and auth_date.
+func (s *AuthService) VerifyTelegramLogin(payload TelegramAuthPayload) error {
+	if !s.TelegramEnabled() {
+		return domain.NewAppError(503, "Telegram login is not configured", nil)
+	}
+	if payload.ID <= 0 || strings.TrimSpace(payload.Hash) == "" || payload.AuthDate <= 0 {
+		return domain.NewAppError(400, "Invalid Telegram login payload", nil)
+	}
+
+	authAt := time.Unix(payload.AuthDate, 0)
+	if time.Since(authAt) > telegramAuthMaxAge || authAt.After(time.Now().Add(5*time.Minute)) {
+		return domain.NewAppError(401, "Telegram login data expired", nil)
+	}
+
+	fields := map[string]string{
+		"auth_date": strconv.FormatInt(payload.AuthDate, 10),
+		"id":        strconv.FormatInt(payload.ID, 10),
+	}
+	if v := strings.TrimSpace(payload.FirstName); v != "" {
+		fields["first_name"] = v
+	}
+	if v := strings.TrimSpace(payload.LastName); v != "" {
+		fields["last_name"] = v
+	}
+	if v := strings.TrimSpace(payload.Username); v != "" {
+		fields["username"] = v
+	}
+	if v := strings.TrimSpace(payload.PhotoURL); v != "" {
+		fields["photo_url"] = v
+	}
+
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+fields[k])
+	}
+	dataCheckString := strings.Join(parts, "\n")
+
+	secret := sha256.Sum256([]byte(strings.TrimSpace(s.config.TelegramBotToken)))
+	mac := hmac.New(sha256.New, secret[:])
+	_, _ = mac.Write([]byte(dataCheckString))
+	expected := hex.EncodeToString(mac.Sum(nil))
+
+	if !hmac.Equal([]byte(strings.ToLower(expected)), []byte(strings.ToLower(strings.TrimSpace(payload.Hash)))) {
+		return domain.NewAppError(401, "Invalid Telegram login signature", nil)
+	}
+	return nil
+}
+
+func (s *AuthService) TelegramLogin(ctx context.Context, payload TelegramAuthPayload, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
+	log := logger.FromContext(ctx)
+	if err := s.VerifyTelegramLogin(payload); err != nil {
+		return "", "", nil, err
+	}
+
+	user, err := s.userRepo.GetByTelegramID(payload.ID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		log.Error("auth.telegram_login.db_error", "telegram_id", payload.ID, "error", err)
+		return "", "", nil, err
+	}
+
+	if errors.Is(err, domain.ErrNotFound) || user == nil {
+		name := strings.TrimSpace(strings.TrimSpace(payload.FirstName) + " " + strings.TrimSpace(payload.LastName))
+		if name == "" {
+			if u := strings.TrimSpace(payload.Username); u != "" {
+				name = u
+			} else {
+				name = fmt.Sprintf("Telegram User %d", payload.ID)
+			}
+		}
+
+		email := fmt.Sprintf("tg_%d@carramarket.com", payload.ID)
+		randBytes := make([]byte, 32)
+		_, _ = rand.Read(randBytes)
+		hashed, err := bcrypt.GenerateFromPassword(randBytes, bcrypt.DefaultCost)
+		if err != nil {
+			return "", "", nil, err
+		}
+
+		tgID := payload.ID
+		user = &domain.User{
+			ID:               uuid.New(),
+			FullName:         name,
+			Email:            email,
+			Password:         string(hashed),
+			Phone:            "",
+			TelegramID:       &tgID,
+			TelegramUsername: strings.TrimSpace(payload.Username),
+			JoinedVia:        "telegram",
+			Role:             domain.RoleParticipant,
+			Status:           domain.StatusActive,
+		}
+
+		if err := s.userRepo.Create(user); err != nil {
+			log.Error("auth.telegram_login.create_user_error", "telegram_id", payload.ID, "error", err)
+			return "", "", nil, err
+		}
+
+		if s.participantRepo != nil {
+			_ = s.participantRepo.Create(&domain.ParticipantUser{
+				ID:        user.ID.String(),
+				Email:     user.Email,
+				FullName:  user.FullName,
+				Phone:     "",
+				Status:    "active",
+				CreatedAt: user.CreatedAt,
+				UpdatedAt: user.UpdatedAt,
+			})
+		}
+
+		_ = s.audit.Log(&domain.AuditLog{
+			UserID:   user.ID,
+			Action:   "USER_SIGNUP_TELEGRAM",
+			Entity:   "user",
+			EntityID: user.ID.String(),
+			Metadata: map[string]interface{}{
+				"telegram_id":       payload.ID,
+				"telegram_username": payload.Username,
+				"role":              user.Role,
+			},
+		}, auditCtx)
+	} else {
+		if user.Status == domain.StatusSuspended {
+			return "", "", nil, domain.NewAppError(403, "Account is suspended", nil)
+		}
+
+		// Keep username fresh when the user changes it on Telegram.
+		if u := strings.TrimSpace(payload.Username); u != "" && u != user.TelegramUsername {
+			user.TelegramUsername = u
+			_ = s.userRepo.Update(user)
+		}
+
+		_ = s.audit.Log(&domain.AuditLog{
+			UserID:   user.ID,
+			Action:   "USER_LOGIN_TELEGRAM",
 			Entity:   "user",
 			EntityID: user.ID.String(),
 		}, auditCtx)
