@@ -43,14 +43,48 @@ func NewAuctionHandler(
 }
 
 type RecordParticipationRequest struct {
-	AuctionID     string  `json:"auctionId"     validate:"omitempty,uuid"`
-	ProductID     string  `json:"productId"     validate:"omitempty,uuid"`
-	ParticipantID string  `json:"participantId"`
-	TransactionID string  `json:"transactionId"`
-	FeePaid       float64 `json:"feePaid"`
-	BidValue      float64 `json:"bidValue"`
-	CheckoutURL   string  `json:"checkoutUrl"`
-	ReturnURL     string  `json:"returnUrl"`
+	AuctionID     string    `json:"auctionId"     validate:"omitempty,uuid"`
+	ProductID     string    `json:"productId"     validate:"omitempty,uuid"`
+	ParticipantID string    `json:"participantId"`
+	TransactionID string    `json:"transactionId"`
+	FeePaid       float64   `json:"feePaid"`
+	BidValue      float64   `json:"bidValue"`
+	BidValues     []float64 `json:"bidValues"`
+	CheckoutURL   string    `json:"checkoutUrl"`
+	ReturnURL     string    `json:"returnUrl"`
+}
+
+const maxBidPackSize = 10
+
+func normalizeBidPack(req RecordParticipationRequest) ([]domain.Money, error) {
+	raw := make([]float64, 0, len(req.BidValues)+1)
+	if len(req.BidValues) > 0 {
+		raw = append(raw, req.BidValues...)
+	} else if req.BidValue > 0 {
+		raw = append(raw, req.BidValue)
+	}
+	if len(raw) == 0 {
+		return nil, domain.NewAppError(400, "Add at least one bid value", nil)
+	}
+	if len(raw) > maxBidPackSize {
+		return nil, domain.NewAppError(400, fmt.Sprintf("Maximum %d bids per payment", maxBidPackSize), nil)
+	}
+
+	out := make([]domain.Money, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, v := range raw {
+		if v <= 0 {
+			return nil, domain.NewAppError(400, "Each bid must be greater than zero", nil)
+		}
+		m := domain.NewMoney(v)
+		key := m.String()
+		if _, ok := seen[key]; ok {
+			return nil, domain.NewAppError(400, "Bid values in a pack must be unique", nil)
+		}
+		seen[key] = struct{}{}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 type PlaceBidRequest struct {
@@ -150,14 +184,21 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusUnauthorized, "Authentication required", nil)
 	}
 
-	bidMoney := domain.Zero()
-	if req.BidValue > 0 {
-		bidMoney = domain.NewMoney(req.BidValue)
-	}
-
-	a, err := h.svc.ValidateAuctionAndBid(auctionID, participantID, bidMoney)
+	bidPack, err := normalizeBidPack(req)
 	if err != nil {
 		return mapLUBError(c, err)
+	}
+
+	var a *domain.Auction
+	for _, bidMoney := range bidPack {
+		validated, vErr := h.svc.ValidateAuctionAndBid(auctionID, participantID, bidMoney)
+		if vErr != nil {
+			return mapLUBError(c, vErr)
+		}
+		a = validated
+	}
+	if a == nil {
+		return response.Error(c, fiber.StatusBadRequest, "Invalid bid pack", nil)
 	}
 
 	if h.chapaClient == nil || h.chapaPaymentSvc == nil {
@@ -166,12 +207,15 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 
 	txRef := "R-" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20]
 
-	if err := h.chapaPaymentSvc.CreatePendingPayment(c.Context(), txRef, userUUID, auctionID, a.EntranceFee); err != nil {
+	chargeAmount := domain.Zero()
+	for range bidPack {
+		chargeAmount = chargeAmount.Add(a.EntranceFee)
+	}
+
+	if err := h.chapaPaymentSvc.CreatePendingPayment(c.Context(), txRef, userUUID, auctionID, chargeAmount); err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to create pending payment", err)
 	}
-	if bidMoney.IsPositive() {
-		h.chapaPaymentSvc.SetPendingBid(txRef, bidMoney)
-	}
+	h.chapaPaymentSvc.SetPendingBids(txRef, bidPack)
 
 	email := "bidder@carramarket.com"
 	firstName := "CarraMarket"
@@ -223,12 +267,19 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		returnBase = fmt.Sprintf("%s/auctions/%s", strings.TrimRight(origin, "/"), auctionID.String())
 	}
 
+	bidValueStrings := make([]string, 0, len(bidPack))
+	for _, m := range bidPack {
+		bidValueStrings = append(bidValueStrings, m.String())
+	}
+
 	parsedReturn, uErr := url.Parse(returnBase)
 	if uErr == nil {
 		q := parsedReturn.Query()
 		q.Set("tx_ref", txRef)
-		if bidMoney.IsPositive() {
-			q.Set("bid_value", bidMoney.String())
+		if len(bidValueStrings) == 1 {
+			q.Set("bid_value", bidValueStrings[0])
+		} else if len(bidValueStrings) > 1 {
+			q.Set("bid_values", strings.Join(bidValueStrings, ","))
 		}
 		parsedReturn.RawQuery = q.Encode()
 		returnBase = parsedReturn.String()
@@ -237,13 +288,22 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 	meta := map[string]interface{}{
 		"auction_id": auctionID.String(),
 		"user_id":    userUUID.String(),
+		"ticket_count": len(bidPack),
 	}
-	if bidMoney.IsPositive() {
-		meta["bid_value"] = bidMoney.String()
+	if len(bidValueStrings) == 1 {
+		meta["bid_value"] = bidValueStrings[0]
+	}
+	if len(bidValueStrings) > 0 {
+		meta["bid_values"] = bidValueStrings
+	}
+
+	desc := "Auction entrance fee and bid"
+	if len(bidPack) > 1 {
+		desc = fmt.Sprintf("Auction bid pack (%d tickets)", len(bidPack))
 	}
 
 	initResp, err := h.chapaClient.InitializeTransaction(ports.ChapaInitializeRequest{
-		Amount:      a.EntranceFee.String(),
+		Amount:      chargeAmount.String(),
 		Currency:    "ETB",
 		Email:       email,
 		FirstName:   firstName,
@@ -253,7 +313,7 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		CallbackURL: callbackURL,
 		ReturnURL:   returnBase,
 		Title:       "CarraMarket",
-		Description: "Auction entrance fee and bid",
+		Description: desc,
 		Meta:        meta,
 	})
 	if err != nil {
@@ -263,6 +323,8 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 	return response.Success(c, fiber.StatusOK, "Chapa checkout initialized", fiber.Map{
 		"checkoutUrl": initResp.CheckoutURL,
 		"txRef":       initResp.TxRef,
+		"ticketCount": len(bidPack),
+		"amount":      chargeAmount,
 	})
 }
 
@@ -275,9 +337,10 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 		txRef = strings.TrimSpace(c.Query("trx_ref"))
 	}
 	var body struct {
-		TxRef    string  `json:"txRef"`
-		TxRefAlt string  `json:"tx_ref"`
-		BidValue float64 `json:"bidValue"`
+		TxRef     string    `json:"txRef"`
+		TxRefAlt  string    `json:"tx_ref"`
+		BidValue  float64   `json:"bidValue"`
+		BidValues []float64 `json:"bidValues"`
 	}
 	_ = c.Bind().JSON(&body)
 	if txRef == "" {
@@ -290,11 +353,28 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "txRef is required", nil)
 	}
 
-	bidVal := body.BidValue
-	if bidVal <= 0 {
+	bidVals := make([]domain.Money, 0)
+	for _, v := range body.BidValues {
+		if v > 0 {
+			bidVals = append(bidVals, domain.NewMoney(v))
+		}
+	}
+	if len(bidVals) == 0 && body.BidValue > 0 {
+		bidVals = append(bidVals, domain.NewMoney(body.BidValue))
+	}
+	if len(bidVals) == 0 {
+		if qVals := strings.TrimSpace(c.Query("bid_values")); qVals != "" {
+			for _, part := range strings.Split(qVals, ",") {
+				if parsed, pErr := strconv.ParseFloat(strings.TrimSpace(part), 64); pErr == nil && parsed > 0 {
+					bidVals = append(bidVals, domain.NewMoney(parsed))
+				}
+			}
+		}
+	}
+	if len(bidVals) == 0 {
 		if qVal := strings.TrimSpace(c.Query("bid_value")); qVal != "" {
 			if parsed, pErr := strconv.ParseFloat(qVal, 64); pErr == nil && parsed > 0 {
-				bidVal = parsed
+				bidVals = append(bidVals, domain.NewMoney(parsed))
 			}
 		}
 	}
@@ -318,9 +398,10 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 		Meta:           metaMap,
 		CustomerEmail:  snap.CustomerEmail,
 		CustomerFirst:  snap.CustomerFirst,
+		BidValues:      bidVals,
 	}
-	if bidVal > 0 {
-		verifiedSnap.BidValue = domain.NewMoney(bidVal)
+	if len(bidVals) == 1 {
+		verifiedSnap.BidValue = bidVals[0]
 	}
 
 	if err := h.chapaPaymentSvc.ProcessVerified(c.Context(), verifiedSnap); err != nil {
