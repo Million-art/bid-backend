@@ -29,7 +29,7 @@ func NewTelegramBroadcastHandler(
 }
 
 type broadcastRequest struct {
-	Target     string `json:"target" validate:"required,oneof=channel bot"`
+	Target     string `json:"target" validate:"required,oneof=channel bot admin"`
 	Text       string `json:"text"`
 	MediaType  string `json:"mediaType" validate:"omitempty,oneof=none photo video animation"`
 	FileID     string `json:"fileId"`
@@ -54,10 +54,9 @@ func (h *TelegramBroadcastHandler) Stats(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to count telegram users", err)
 	}
 	return response.Success(c, fiber.StatusOK, "Telegram broadcast stats", fiber.Map{
-		"botAudience":       len(userIDs),
-		"fromUsers":         len(userIDs),
-		"channelConfigured": h.poster != nil && h.poster.ChannelConfigured(),
-		"botConfigured":     h.poster != nil && h.poster.BroadcastConfigured(),
+		"botAudience":     len(userIDs),
+		"botConfigured":   h.poster != nil && h.poster.BroadcastConfigured(),
+		"adminConfigured": h.poster != nil && h.poster.AdminConfigured(),
 	})
 }
 
@@ -158,6 +157,7 @@ func (h *TelegramBroadcastHandler) Webhook(c fiber.Ctx) error {
 				UserID      int64  `json:"user_id"`
 			} `json:"contact"`
 			Chat *struct {
+				ID   int64  `json:"id"`
 				Type string `json:"type"`
 			} `json:"chat"`
 			From *struct {
@@ -181,7 +181,9 @@ func (h *TelegramBroadcastHandler) Webhook(c fiber.Ctx) error {
 
 	name := strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
 	phone := ""
+	sharedContact := false
 	if msg.Contact != nil && strings.TrimSpace(msg.Contact.PhoneNumber) != "" {
+		sharedContact = true
 		phone, _ = services.NormalizePhone(msg.Contact.PhoneNumber)
 		if phone == "" {
 			phone = strings.TrimSpace(msg.Contact.PhoneNumber)
@@ -192,5 +194,19 @@ func (h *TelegramBroadcastHandler) Webhook(c fiber.Ctx) error {
 	}
 
 	_, _ = h.users.UpsertTelegramProfile(msg.From.ID, msg.From.Username, name, phone)
+
+	chatID := msg.From.ID
+	if msg.Chat != nil && msg.Chat.ID != 0 {
+		chatID = msg.Chat.ID
+	}
+
+	if h.poster != nil {
+		if sharedContact {
+			_ = h.poster.SendContactThanks(c.Context(), chatID)
+		} else if strings.HasPrefix(strings.TrimSpace(msg.Text), "/start") {
+			_ = h.poster.SendStartWelcome(c.Context(), chatID)
+		}
+	}
+
 	return c.SendStatus(fiber.StatusOK)
 }

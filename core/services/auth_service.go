@@ -998,8 +998,8 @@ func (s *AuthService) TelegramWebAppLogin(ctx context.Context, initData string, 
 	return s.completeTelegramLogin(ctx, *payload, auditCtx)
 }
 
-// VerifyTelegramWebAppInitData validates Mini App initData per Telegram docs
-// (HMAC-SHA256 with secret_key = HMAC_SHA256(bot_token, "WebAppData")).
+// VerifyTelegramWebAppInitData validates Mini App initData per Telegram docs:
+// secret_key = HMAC_SHA256(key="WebAppData", message=bot_token)
 func (s *AuthService) VerifyTelegramWebAppInitData(initData string) (*TelegramAuthPayload, error) {
 	if !s.TelegramEnabled() {
 		return nil, domain.NewAppError(503, "Telegram login is not configured", nil)
@@ -1018,7 +1018,7 @@ func (s *AuthService) VerifyTelegramWebAppInitData(initData string) (*TelegramAu
 		return nil, domain.NewAppError(400, "Invalid Telegram initData", nil)
 	}
 	values.Del("hash")
-	// signature is used by some clients; ignore for classic hash validation.
+	// Ed25519 third-party signature — not used for bot-token hash validation.
 	values.Del("signature")
 
 	keys := make([]string, 0, len(values))
@@ -1032,8 +1032,9 @@ func (s *AuthService) VerifyTelegramWebAppInitData(initData string) (*TelegramAu
 	}
 	dataCheckString := strings.Join(parts, "\n")
 
-	secretMac := hmac.New(sha256.New, []byte(strings.TrimSpace(s.config.TelegramBotToken)))
-	_, _ = secretMac.Write([]byte("WebAppData"))
+	// Key MUST be the constant "WebAppData"; message is the bot token.
+	secretMac := hmac.New(sha256.New, []byte("WebAppData"))
+	_, _ = secretMac.Write([]byte(strings.TrimSpace(s.config.TelegramBotToken)))
 	secretKey := secretMac.Sum(nil)
 
 	mac := hmac.New(sha256.New, secretKey)

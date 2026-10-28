@@ -16,6 +16,7 @@ const (
 
 	TargetChannel = "channel"
 	TargetBot     = "bot"
+	TargetAdmin   = "admin"
 
 	maxMessageRunes = 4096
 	botSendDelay    = 40 * time.Millisecond
@@ -46,6 +47,10 @@ func (p *ChannelPoster) BroadcastConfigured() bool {
 
 func (p *ChannelPoster) ChannelConfigured() bool {
 	return p.BroadcastConfigured() && strings.TrimSpace(p.channel) != ""
+}
+
+func (p *ChannelPoster) AdminConfigured() bool {
+	return p.BroadcastConfigured() && strings.TrimSpace(p.adminID) != ""
 }
 
 // Broadcast sends one message to the channel or many chats (bot DMs).
@@ -117,6 +122,18 @@ func (p *ChannelPoster) Broadcast(ctx context.Context, in BroadcastInput, chatID
 		result.Sent = 1
 		return result, nil
 
+	case TargetAdmin:
+		if !p.AdminConfigured() {
+			return nil, fmt.Errorf("ADMIN_ID is not configured")
+		}
+		result.Audience = 1
+		if err := p.sendToChat(ctx, p.adminID, mediaType, fileID, caption, keyboard); err != nil {
+			result.Failed = 1
+			return result, err
+		}
+		result.Sent = 1
+		return result, nil
+
 	case TargetBot:
 		result.Audience = len(chatIDs)
 		if len(chatIDs) == 0 {
@@ -143,7 +160,7 @@ func (p *ChannelPoster) Broadcast(ctx context.Context, in BroadcastInput, chatID
 		return result, nil
 
 	default:
-		return nil, fmt.Errorf("target must be %q or %q", TargetChannel, TargetBot)
+		return nil, fmt.Errorf("target must be %q, %q, or %q", TargetChannel, TargetBot, TargetAdmin)
 	}
 }
 

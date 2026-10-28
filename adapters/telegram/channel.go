@@ -128,6 +128,56 @@ func (p *ChannelPoster) PostAuctionPublished(ctx context.Context, a *domain.Auct
 	return nil
 }
 
+func (p *ChannelPoster) miniAppDeepLink() string {
+	botUser := strings.TrimPrefix(strings.TrimSpace(p.botUser), "@")
+	if botUser == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://t.me/%s/%s", botUser, miniAppShortName)
+}
+
+func (p *ChannelPoster) sendPrivateWithMiniAppButton(ctx context.Context, chatID int64, text, buttonLabel string) error {
+	if !p.BroadcastConfigured() || chatID == 0 {
+		return nil
+	}
+	payload := map[string]any{
+		"chat_id": chatID,
+		"text":    text,
+	}
+	if link := p.miniAppDeepLink(); link != "" {
+		payload["reply_markup"] = map[string]any{
+			"inline_keyboard": [][]map[string]string{
+				{{"text": buttonLabel, "url": link}},
+			},
+		}
+	}
+	return p.apiCall(ctx, "sendMessage", payload)
+}
+
+// SendStartWelcome DMs an Amharic welcome + Mini App open button after /start.
+func (p *ChannelPoster) SendStartWelcome(ctx context.Context, chatID int64) error {
+	if p.miniAppDeepLink() == "" {
+		p.log.Debug("telegram_start_welcome_skipped", "reason", "bot_username_missing")
+		return nil
+	}
+	return p.sendPrivateWithMiniAppButton(
+		ctx,
+		chatID,
+		"እንኳን ደህና መጡ! ጨረታዎችን ለማየት ከታች ይጫኑ።",
+		"ጨረታ ክፈት",
+	)
+}
+
+// SendContactThanks acknowledges a shared phone contact in Amharic.
+func (p *ChannelPoster) SendContactThanks(ctx context.Context, chatID int64) error {
+	return p.sendPrivateWithMiniAppButton(
+		ctx,
+		chatID,
+		"አመሰግናለን! ስልክ ቁጥርዎ ተቀብለናል። ጨረታ ለመቀጠል ከታች ይጫኑ።",
+		"ጨረታ ክፈት",
+	)
+}
+
 func (p *ChannelPoster) notifyAdmin(ctx context.Context, text string) {
 	if p.adminID == "" {
 		return
