@@ -11,6 +11,7 @@ import (
 	"github.com/bid-hub/admin-backend/adapters/repository/redis"
 	"github.com/bid-hub/admin-backend/adapters/service"
 	r2storage "github.com/bid-hub/admin-backend/adapters/storage/r2"
+	telegramadapter "github.com/bid-hub/admin-backend/adapters/telegram"
 	"github.com/bid-hub/admin-backend/core/services"
 	"github.com/bid-hub/admin-backend/core/services/chapapayment"
 	"github.com/bid-hub/admin-backend/core/services/lub"
@@ -85,7 +86,8 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	participationRepo := postgres.NewAuctionParticipationRepository(db)
 	bidRepo := postgres.NewBidRepository(db)
 	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, participationRepo, cacheRepo, emailService, smsService)
-	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService)
+	telegramPoster := telegramadapter.NewChannelPoster(cfg, slog.Default())
+	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService, telegramPoster)
 	chapaPaymentSvc := chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
 	auctionHandler := NewAuctionHandler(auctionService, chapaPaymentSvc, chapaClient, userRepo, cfg)

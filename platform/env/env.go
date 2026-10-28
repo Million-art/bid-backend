@@ -43,7 +43,9 @@ type Config struct {
 	ExposeDebugMetrics               bool
 	GoogleClientID                   string
 	TelegramBotToken                 string // BOT_TOKEN or TELEGRAM_BOT_TOKEN
-	TelegramBotUsername              string // optional; resolved via getMe when empty
+	TelegramBotUsername              string // BOT_USERNAME or TELEGRAM_BOT_USERNAME
+	TelegramChannelID                string // CHANNEL_ID — channel/supergroup for auction posts
+	TelegramAdminID                  string // ADMIN_ID — optional admin chat for failure DMs
 
 	// Chapa Payment Gateway
 	ChapaPublicKey     string
@@ -154,6 +156,8 @@ func LoadConfig() *Config {
 		GoogleClientID:                   getEnv("GOOGLE_CLIENT_ID", "510278494876-bkmbkv9hfuelp0a5pv8lcqpd32ondgst.apps.googleusercontent.com"),
 		TelegramBotToken:                 getEnvFallback("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", ""),
 		TelegramBotUsername:              strings.TrimPrefix(getEnvFallback("TELEGRAM_BOT_USERNAME", "BOT_USERNAME", ""), "@"),
+		TelegramChannelID:                getEnvFallback("CHANNEL_ID", "TELEGRAM_CHANNEL_ID", ""),
+		TelegramAdminID:                  getEnvFallback("ADMIN_ID", "TELEGRAM_ADMIN_ID", ""),
 		ChapaPublicKey:                   getEnv("CHAPA_PUBLIC_KEY", ""),
 		ChapaSecretKey:                   getEnv("CHAPA_SECRET_KEY", ""),
 		ChapaEncryptionKey:               getEnv("CHAPA_ENCRYPTION_KEY", ""),

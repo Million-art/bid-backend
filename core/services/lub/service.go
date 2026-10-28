@@ -15,6 +15,7 @@ type Service struct {
 	bidRepo           ports.BidRepository
 	audit             ports.AuditLogService
 	notificationSvc   LUBNotificationProvider
+	telegramPoster    TelegramChannelPoster
 }
 
 // LUBNotificationProvider is the subset of notification methods LUB triggers.
@@ -29,12 +30,18 @@ type LUBNotificationProvider interface {
 	NotifyAuctionNoWinner(ctx context.Context, productID uuid.UUID, productName string) error
 }
 
+// TelegramChannelPoster posts newly published auctions to a Telegram channel.
+type TelegramChannelPoster interface {
+	PostAuctionPublished(ctx context.Context, a *domain.Auction) error
+}
+
 func NewService(
 	auctionRepo ports.AuctionRepository,
 	participationRepo ports.AuctionParticipationRepository,
 	bidRepo ports.BidRepository,
 	audit ports.AuditLogService,
 	notificationSvc LUBNotificationProvider,
+	telegramPoster TelegramChannelPoster,
 ) *Service {
 	return &Service{
 		auctionRepo:       auctionRepo,
@@ -42,11 +49,19 @@ func NewService(
 		bidRepo:           bidRepo,
 		audit:             audit,
 		notificationSvc:   notificationSvc,
+		telegramPoster:    telegramPoster,
 	}
 }
 
 func (s *Service) notify(fn func() error) {
 	if s.notificationSvc == nil || fn == nil {
+		return
+	}
+	_ = fn()
+}
+
+func (s *Service) postTelegram(fn func() error) {
+	if s.telegramPoster == nil || fn == nil {
 		return
 	}
 	_ = fn()

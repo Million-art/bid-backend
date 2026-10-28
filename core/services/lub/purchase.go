@@ -105,9 +105,13 @@ func (s *Service) ActivateAuction(ctx context.Context, id uuid.UUID, actorID uui
 	if err := s.auctionRepo.UpdateStatus(id, domain.AuctionStatusActive); err != nil {
 		return err
 	}
+	a.Status = domain.AuctionStatusActive
 	s.logAudit(actorID, "auction.activated", "auction", id.String(), a.Title)
 	s.notify(func() error {
 		return s.notificationSvc.NotifyAuctionActivated(ctx, id, a.Title)
+	})
+	s.postTelegram(func() error {
+		return s.telegramPoster.PostAuctionPublished(ctx, a)
 	})
 	return nil
 }

@@ -344,7 +344,7 @@ func processDueProducts(ctx context.Context, db *gorm.DB) error {
 	userRepo := postgres.NewUserRepository(db)
 	participantUserRepo := postgres.NewParticipantUserRepository(db)
 	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, partRepo, nil, nil, nil)
-	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, notifSvc)
+	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, notifSvc, nil)
 	return lubSvc.ProcessDueAuctions(ctx)
 }
 

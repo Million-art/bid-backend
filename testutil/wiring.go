@@ -43,6 +43,7 @@ func NewStack(t testing.TB, pg *PG) *Stack {
 		bidRepo,
 		auditSvc,
 		notifSvc,
+		nil,
 	)
 
 	chapaSvc := chapapayment.NewService(

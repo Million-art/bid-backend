@@ -174,7 +174,7 @@ type mockAudit struct{}
 func (mockAudit) Log(log *domain.AuditLog, ctx *domain.AuditContext) error { return nil }
 
 func newSvc(ar *mockAuctionRepo, pa *mockPartRepo, br *mockBidRepo) *Service {
-	return NewService(ar, pa, br, mockAudit{}, nil)
+	return NewService(ar, pa, br, mockAudit{}, nil, nil)
 }
 
 func TestExecuteDraw_AlreadyExecuted(t *testing.T) {
