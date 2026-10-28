@@ -32,7 +32,7 @@ func winnerCopy(productName string, winningBid domain.Money) (title, message, pr
 }
 
 func noWinnerCopy(productName string) (title, message, priority string) {
-	return "Auction ended — no winner",
+	return "Auction ended  no winner",
 		fmt.Sprintf("The draw for '%s' found no unique lowest bid. Stay tuned for the next auction.", productName),
 		domain.NotificationPriorityNormal
 }

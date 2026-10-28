@@ -44,8 +44,8 @@ type Config struct {
 	GoogleClientID                   string
 	TelegramBotToken                 string // BOT_TOKEN or TELEGRAM_BOT_TOKEN
 	TelegramBotUsername              string // BOT_USERNAME or TELEGRAM_BOT_USERNAME
-	TelegramChannelID                string // CHANNEL_ID — channel/supergroup for auction posts
-	TelegramAdminID                  string // ADMIN_ID — optional admin chat for failure DMs
+	TelegramChannelID                string // CHANNEL_ID  channel/supergroup for auction posts
+	TelegramAdminID                  string // ADMIN_ID  optional admin chat for failure DMs
 
 	// Chapa Payment Gateway
 	ChapaPublicKey     string
