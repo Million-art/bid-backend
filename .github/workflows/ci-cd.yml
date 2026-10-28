@@ -123,19 +123,36 @@ jobs:
 
             # Export tag and pull new image
             export CLIENT_API_TAG="$CLIENT_API_TAG"
-            echo "⬇️ Pulling new backend image..."
-            docker compose pull backend
+            echo "⬇️ Pulling new backend image ($CLIENT_API_TAG)..."
+
+            # containerd image-store can fail intermittently with:
+            #   "lease does not exist: not found"
+            # Retry a few times before failing the deploy.
+            pull_ok=0
+            for attempt in 1 2 3 4 5; do
+              if docker compose pull backend; then
+                pull_ok=1
+                break
+              fi
+              echo "⚠️ Pull attempt $attempt failed; waiting before retry..."
+              sleep $((attempt * 3))
+            done
+            if [ "$pull_ok" != "1" ]; then
+              echo "❌ docker compose pull backend failed after retries"
+              docker images | head -n 30 || true
+              exit 1
+            fi
 
             # Recreate backend container
             echo "▶️ Updating backend container..."
-            docker compose up -d backend
+            docker compose up -d --force-recreate backend
 
             # Quick status check
             sleep 3
             docker compose ps backend
 
-            # Clean up old unused images
-            docker image prune -f --filter "until=24h"
+            # Prune AFTER deploy only (never during pull — races with leases)
+            docker image prune -f --filter "until=24h" || true
 
             echo "=========================================================="
             echo "✨ Backend deployed successfully via Docker Compose!"
