@@ -2,11 +2,13 @@ package postgres
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -133,6 +135,73 @@ func (r *UserRepo) ListTelegramIDs() ([]int64, error) {
 		Order("telegram_id ASC").
 		Pluck("telegram_id", &ids).Error
 	return ids, err
+}
+
+// UpsertTelegramProfile updates an existing Telegram-linked user, or creates a
+// participant account the same way Telegram Login Widget signup does.
+func (r *UserRepo) UpsertTelegramProfile(telegramID int64, username, fullName, phone string) (*domain.User, error) {
+	if telegramID <= 0 {
+		return nil, domain.ErrInvalidInput
+	}
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	fullName = strings.TrimSpace(fullName)
+	phone = strings.TrimSpace(phone)
+
+	user, err := r.GetByTelegramID(telegramID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return nil, err
+	}
+
+	if user != nil {
+		changed := false
+		if username != "" && user.TelegramUsername != username {
+			user.TelegramUsername = username
+			changed = true
+		}
+		if fullName != "" && (user.FullName == "" || strings.HasPrefix(user.FullName, "Telegram User")) {
+			user.FullName = fullName
+			changed = true
+		}
+		if phone != "" && strings.TrimSpace(user.Phone) == "" {
+			user.Phone = phone
+			changed = true
+		}
+		if changed {
+			if err := r.Update(user); err != nil {
+				return nil, err
+			}
+		}
+		return user, nil
+	}
+
+	if fullName == "" {
+		if username != "" {
+			fullName = username
+		} else {
+			fullName = "Telegram User " + strconv.FormatInt(telegramID, 10)
+		}
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte("TELEGRAM_ONLY_"+strconv.FormatInt(telegramID, 10)), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	tgID := telegramID
+	user = &domain.User{
+		ID:               uuid.New(),
+		FullName:         fullName,
+		Email:            "tg_" + strconv.FormatInt(telegramID, 10) + "@carramarket.com",
+		Password:         string(hashed),
+		Phone:            phone,
+		TelegramID:       &tgID,
+		TelegramUsername: username,
+		JoinedVia:        "telegram",
+		Role:             domain.RoleParticipant,
+		Status:           domain.StatusActive,
+	}
+	if err := r.Create(user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 // GetUserCountByMonth returns new user registrations per month for the last N months.

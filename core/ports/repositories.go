@@ -25,12 +25,7 @@ type UserRepository interface {
 	Count(filter map[string]interface{}) (int64, error)
 	Delete(id uuid.UUID) error
 	ListTelegramIDs() ([]int64, error)
-}
-
-type TelegramSubscriberRepository interface {
-	Upsert(sub *domain.TelegramSubscriber) error
-	ListTelegramIDs() ([]int64, error)
-	Count() (int64, error)
+	UpsertTelegramProfile(telegramID int64, username, fullName, phone string) (*domain.User, error)
 }
 
 type AuditLogRepository interface {

@@ -87,7 +87,6 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	bidRepo := postgres.NewBidRepository(db)
 	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, participationRepo, cacheRepo, emailService, smsService)
 	telegramPoster := telegramadapter.NewChannelPoster(cfg, slog.Default())
-	telegramSubscriberRepo := postgres.NewTelegramSubscriberRepository(db)
 	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService, telegramPoster)
 	chapaPaymentSvc := chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
@@ -107,7 +106,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	notificationHandler := NewNotificationHandler(notificationService)
 	legalDocHandler := NewLegalDocumentHandler(legalDocService)
 	paymentHandler := NewPaymentHandler(paymentLedgerSvc)
-	telegramBroadcastHandler := NewTelegramBroadcastHandler(telegramPoster, userRepo, telegramSubscriberRepo)
+	telegramBroadcastHandler := NewTelegramBroadcastHandler(telegramPoster, userRepo)
 
 	r2PresignService, err := r2storage.NewPresignService(cfg)
 	if err != nil {
@@ -128,13 +127,20 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	registerPaymentRoutes(protected, paymentHandler)
 	registerAdminAuctionRoutes(protected, auctionAdminHandler)
 	registerMiscRoutes(protected, dashboardHandler, mediaPresignHandler, notificationHandler, legalDocHandler)
-	registerTelegramBroadcastRoutes(api, protected, telegramBroadcastHandler)
+	registerTelegramBroadcastRoutes(api, optionalAuth, protected, telegramBroadcastHandler)
 
 	return nil
 }
 
-func registerTelegramBroadcastRoutes(api fiber.Router, protected fiber.Router, h *TelegramBroadcastHandler) {
+func registerTelegramBroadcastRoutes(
+	api fiber.Router,
+	optionalAuth fiber.Handler,
+	protected fiber.Router,
+	h *TelegramBroadcastHandler,
+) {
 	api.Post("/webhooks/telegram", h.Webhook)
+	// Mini App may share contact before the user has a JWT session.
+	api.Post("/telegram/share-contact", optionalAuth, h.ShareContact)
 	tg := protected.Group("/telegram")
 	tg.Get("/broadcast/stats", h.Stats)
 	tg.Post("/broadcast", h.Broadcast)

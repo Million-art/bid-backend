@@ -7,25 +7,24 @@ import (
 	telegramadapter "github.com/bid-hub/admin-backend/adapters/telegram"
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/bid-hub/admin-backend/core/ports"
+	"github.com/bid-hub/admin-backend/core/services"
 	"github.com/bid-hub/admin-backend/platform/validate"
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 )
 
 type TelegramBroadcastHandler struct {
-	poster      *telegramadapter.ChannelPoster
-	users       ports.UserRepository
-	subscribers ports.TelegramSubscriberRepository
+	poster *telegramadapter.ChannelPoster
+	users  ports.UserRepository
 }
 
 func NewTelegramBroadcastHandler(
 	poster *telegramadapter.ChannelPoster,
 	users ports.UserRepository,
-	subscribers ports.TelegramSubscriberRepository,
 ) *TelegramBroadcastHandler {
 	return &TelegramBroadcastHandler{
-		poster:      poster,
-		users:       users,
-		subscribers: subscribers,
+		poster: poster,
+		users:  users,
 	}
 }
 
@@ -54,15 +53,9 @@ func (h *TelegramBroadcastHandler) Stats(c fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to count telegram users", err)
 	}
-	subIDs, err := h.subscribers.ListTelegramIDs()
-	if err != nil {
-		return response.Error(c, fiber.StatusInternalServerError, "Failed to count telegram subscribers", err)
-	}
-	merged := telegramadapter.MergeTelegramIDs(userIDs, subIDs)
 	return response.Success(c, fiber.StatusOK, "Telegram broadcast stats", fiber.Map{
-		"botAudience":       len(merged),
+		"botAudience":       len(userIDs),
 		"fromUsers":         len(userIDs),
-		"fromSubscribers":   len(subIDs),
 		"channelConfigured": h.poster != nil && h.poster.ChannelConfigured(),
 		"botConfigured":     h.poster != nil && h.poster.BroadcastConfigured(),
 	})
@@ -92,15 +85,11 @@ func (h *TelegramBroadcastHandler) Broadcast(c fiber.Ctx) error {
 
 	var chatIDs []int64
 	if strings.EqualFold(req.Target, telegramadapter.TargetBot) {
-		userIDs, err := h.users.ListTelegramIDs()
+		ids, err := h.users.ListTelegramIDs()
 		if err != nil {
 			return response.Error(c, fiber.StatusInternalServerError, "Failed to load telegram users", err)
 		}
-		subIDs, err := h.subscribers.ListTelegramIDs()
-		if err != nil {
-			return response.Error(c, fiber.StatusInternalServerError, "Failed to load telegram subscribers", err)
-		}
-		chatIDs = telegramadapter.MergeTelegramIDs(userIDs, subIDs)
+		chatIDs = ids
 	}
 
 	result, err := h.poster.Broadcast(c.Context(), in, chatIDs)
@@ -114,17 +103,75 @@ func (h *TelegramBroadcastHandler) Broadcast(c fiber.Ctx) error {
 	return response.Success(c, fiber.StatusOK, msg, result)
 }
 
-// TelegramWebhook records /start (and any private message) so staff can broadcast to bot users.
+type shareContactRequest struct {
+	TelegramID int64  `json:"telegramId" validate:"required,gt=0"`
+	Phone      string `json:"phone" validate:"required"`
+	FullName   string `json:"fullName"`
+	Username   string `json:"username"`
+}
+
+// ShareContact saves a phone shared from the Telegram Mini App onto users.
+func (h *TelegramBroadcastHandler) ShareContact(c fiber.Ctx) error {
+	var req shareContactRequest
+	if err := validate.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+	normalized, _ := services.NormalizePhone(req.Phone)
+	if normalized == "" {
+		normalized = strings.TrimSpace(req.Phone)
+	}
+
+	user, err := h.users.UpsertTelegramProfile(
+		req.TelegramID,
+		req.Username,
+		req.FullName,
+		normalized,
+	)
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to save contact", err)
+	}
+
+	// If a different logged-in account is open, also attach phone/telegram when blank.
+	if uid := strings.TrimSpace(GetUserID(c)); uid != "" {
+		if userID, err := uuid.Parse(uid); err == nil && user != nil && user.ID != userID {
+			if loggedIn, err := h.users.GetByID(userID); err == nil && loggedIn != nil {
+				changed := false
+				if strings.TrimSpace(loggedIn.Phone) == "" {
+					loggedIn.Phone = normalized
+					changed = true
+				}
+				if loggedIn.TelegramID == nil {
+					tg := req.TelegramID
+					loggedIn.TelegramID = &tg
+					changed = true
+				}
+				if changed {
+					_ = h.users.Update(loggedIn)
+				}
+			}
+		}
+	}
+
+	return response.Success(c, fiber.StatusOK, "Contact saved", fiber.Map{
+		"telegramId": req.TelegramID,
+		"phone":      normalized,
+		"userId":     user.ID,
+	})
+}
+
+// TelegramWebhook records /start and shared contacts onto the users table.
 func (h *TelegramBroadcastHandler) Webhook(c fiber.Ctx) error {
 	var update struct {
 		Message *struct {
-			Text string `json:"text"`
+			Text    string `json:"text"`
+			Contact *struct {
+				PhoneNumber string `json:"phone_number"`
+				FirstName   string `json:"first_name"`
+				LastName    string `json:"last_name"`
+				UserID      int64  `json:"user_id"`
+			} `json:"contact"`
 			Chat *struct {
-				ID        int64  `json:"id"`
-				Username  string `json:"username"`
-				FirstName string `json:"first_name"`
-				LastName  string `json:"last_name"`
-				Type      string `json:"type"`
+				Type string `json:"type"`
 			} `json:"chat"`
 			From *struct {
 				ID        int64  `json:"id"`
@@ -141,16 +188,22 @@ func (h *TelegramBroadcastHandler) Webhook(c fiber.Ctx) error {
 	if msg == nil || msg.From == nil || msg.From.ID == 0 {
 		return c.SendStatus(fiber.StatusOK)
 	}
-	// Only track private chats (bot DMs / Start).
 	if msg.Chat != nil && msg.Chat.Type != "" && msg.Chat.Type != "private" {
 		return c.SendStatus(fiber.StatusOK)
 	}
 
 	name := strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
-	_ = h.subscribers.Upsert(&domain.TelegramSubscriber{
-		TelegramID:       msg.From.ID,
-		TelegramUsername: msg.From.Username,
-		FullName:         name,
-	})
+	phone := ""
+	if msg.Contact != nil && strings.TrimSpace(msg.Contact.PhoneNumber) != "" {
+		phone, _ = services.NormalizePhone(msg.Contact.PhoneNumber)
+		if phone == "" {
+			phone = strings.TrimSpace(msg.Contact.PhoneNumber)
+		}
+		if cn := strings.TrimSpace(msg.Contact.FirstName + " " + msg.Contact.LastName); cn != "" {
+			name = cn
+		}
+	}
+
+	_, _ = h.users.UpsertTelegramProfile(msg.From.ID, msg.From.Username, name, phone)
 	return c.SendStatus(fiber.StatusOK)
 }
