@@ -104,6 +104,9 @@ func (m *mockPartRepo) CountByAuction(auctionID uuid.UUID) (int64, error) {
 	}
 	return 0, nil
 }
+func (m *mockPartRepo) CountByAuctionSince(auctionID uuid.UUID, since time.Time) (int64, error) {
+	return 0, nil
+}
 
 type mockBidRepo struct {
 	getFn        func(id uuid.UUID) (*domain.Bid, error)

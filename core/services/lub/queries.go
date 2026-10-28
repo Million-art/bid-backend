@@ -1,8 +1,20 @@
 package lub
 
 import (
+	"time"
+
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/google/uuid"
+)
+
+const (
+	cardTagHot            = "hot"
+	cardTagNew            = "new"
+	cardTagAlmostUnlocked = "almost_unlocked"
+	defaultMinParticipants = 10
+	almostUnlockedRatio   = 0.8
+	newListingWindow      = 48 * time.Hour
+	hotGrowthWindow       = 24 * time.Hour
 )
 
 // ---------------------- Auction queries ----------------------
@@ -19,6 +31,99 @@ func (s *Service) ListAuctions(status, search string, page, limit int) ([]domain
 func (s *Service) ListPublicAuctions(page, limit int) ([]domain.Auction, int64, error) {
 	offset := (page - 1) * limit
 	return s.auctionRepo.ListPublic(limit, offset)
+}
+
+// ListPublicAuctionCards returns list payloads without bid values.
+func (s *Service) ListPublicAuctionCards(page, limit int, viewerID string) ([]domain.PublicAuctionCard, int64, error) {
+	auctions, total, err := s.ListPublicAuctions(page, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.toPublicAuctionCards(auctions, viewerID), total, nil
+}
+
+func (s *Service) toPublicAuctionCards(auctions []domain.Auction, viewerID string) []domain.PublicAuctionCard {
+	now := time.Now().UTC()
+	sinceHot := now.Add(-hotGrowthWindow)
+	growth := make(map[uuid.UUID]int64, len(auctions))
+	var maxGrowth int64
+	for i := range auctions {
+		a := &auctions[i]
+		count, _ := s.participationRepo.CountByAuction(a.ID)
+		a.ParticipantCount = count
+		g, _ := s.participationRepo.CountByAuctionSince(a.ID, sinceHot)
+		growth[a.ID] = g
+		if g > maxGrowth {
+			maxGrowth = g
+		}
+		if viewerID != "" {
+			p, err := s.participationRepo.GetByAuctionAndParticipant(a.ID, viewerID)
+			a.UserHasJoined = err == nil && p != nil && p.Status == domain.ParticipationStatusActive
+		}
+	}
+
+	cards := make([]domain.PublicAuctionCard, 0, len(auctions))
+	for i := range auctions {
+		cards = append(cards, toPublicAuctionCard(auctions[i], growth[auctions[i].ID], maxGrowth, now))
+	}
+	return cards
+}
+
+func toPublicAuctionCard(a domain.Auction, growth24h, maxGrowth int64, now time.Time) domain.PublicAuctionCard {
+	minP := a.MinParticipants
+	if minP <= 0 {
+		minP = defaultMinParticipants
+	}
+	unlocked := a.ParticipantCount >= int64(minP)
+	tag := computeCardTag(a, growth24h, maxGrowth, minP, unlocked, now)
+
+	endsAt := a.CloseAt
+	winnerName := ""
+	if a.Status == domain.AuctionStatusExecuted {
+		winnerName = a.WinnerName
+	}
+
+	return domain.PublicAuctionCard{
+		ID:               a.ID,
+		Title:            a.Title,
+		Description:      a.Description,
+		ImageURL:         a.ImageURL,
+		ImageURLs:        a.ImageURLs,
+		VideoURL:         a.VideoURL,
+		Status:           a.Status,
+		EntranceFee:      a.EntranceFee,
+		RetailValue:      a.RetailValue,
+		MinParticipants:  minP,
+		ParticipantCount: a.ParticipantCount,
+		CloseAt:          a.CloseAt,
+		EndsAt:           endsAt,
+		CreatedAt:        a.CreatedAt,
+		UserHasJoined:    a.UserHasJoined,
+		Tag:              tag,
+		WinnerName:       winnerName,
+		PrizeUnlocked:    unlocked,
+	}
+}
+
+func computeCardTag(a domain.Auction, growth24h, maxGrowth int64, minP int, unlocked bool, now time.Time) string {
+	st := a.Status
+	if st != domain.AuctionStatusActive && st != domain.AuctionStatusPostponed {
+		return ""
+	}
+	// Priority: hot > almost_unlocked > new
+	if maxGrowth > 0 && growth24h == maxGrowth {
+		return cardTagHot
+	}
+	if !unlocked && minP > 0 {
+		ratio := float64(a.ParticipantCount) / float64(minP)
+		if ratio >= almostUnlockedRatio {
+			return cardTagAlmostUnlocked
+		}
+	}
+	if now.Sub(a.CreatedAt) <= newListingWindow {
+		return cardTagNew
+	}
+	return ""
 }
 
 // ---------------------- Participation queries ----------------------

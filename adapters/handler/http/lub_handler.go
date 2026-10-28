@@ -103,12 +103,13 @@ func (h *AuctionHandler) ListPublicAuctions(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	auctions, total, err := h.svc.ListPublicAuctions(page, limit)
+	viewerID := strings.TrimSpace(GetUserID(c))
+	cards, total, err := h.svc.ListPublicAuctionCards(page, limit, viewerID)
 	if err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to list auctions", err)
 	}
 	return response.Success(c, fiber.StatusOK, "Auctions retrieved", fiber.Map{
-		"items": auctions,
+		"items": cards,
 		"total": total,
 		"page":  page,
 		"limit": limit,

@@ -23,31 +23,35 @@ func NewAuctionAdminHandler(svc *lub.Service) *AuctionAdminHandler {
 }
 
 type CreateAuctionRequest struct {
-	Title       string   `json:"title"       validate:"omitempty,min=2,max=255"`
-	Name        string   `json:"name"        validate:"omitempty,min=2,max=255"`
-	Description string   `json:"description" validate:"omitempty"`
-	ImageURL    string   `json:"imageUrl"    validate:"omitempty,url"`
-	ImageURLs   []string `json:"imageUrls"   validate:"omitempty,dive,url"`
-	VideoURL    string   `json:"videoUrl"    validate:"omitempty,url"`
-	EntranceFee float64  `json:"entranceFee" validate:"required,gt=0"`
-	MinBidValue float64  `json:"minBidValue" validate:"omitempty,gt=0"`
-	MaxBidValue *float64 `json:"maxBidValue" validate:"omitempty,gt=0"`
-	StartAt     *string  `json:"startAt"     validate:"omitempty"`
-	CloseAt     *string  `json:"closeAt"     validate:"omitempty"`
+	Title           string   `json:"title"           validate:"omitempty,min=2,max=255"`
+	Name            string   `json:"name"            validate:"omitempty,min=2,max=255"`
+	Description     string   `json:"description"     validate:"omitempty"`
+	ImageURL        string   `json:"imageUrl"        validate:"omitempty,url"`
+	ImageURLs       []string `json:"imageUrls"       validate:"omitempty,dive,url"`
+	VideoURL        string   `json:"videoUrl"        validate:"omitempty,url"`
+	EntranceFee     float64  `json:"entranceFee"     validate:"required,gt=0"`
+	RetailValue     float64  `json:"retailValue"     validate:"omitempty,gte=0"`
+	MinParticipants int      `json:"minParticipants" validate:"omitempty,gte=1"`
+	MinBidValue     float64  `json:"minBidValue"     validate:"omitempty,gt=0"`
+	MaxBidValue     *float64 `json:"maxBidValue"     validate:"omitempty,gt=0"`
+	StartAt         *string  `json:"startAt"         validate:"omitempty"`
+	CloseAt         *string  `json:"closeAt"         validate:"omitempty"`
 }
 
 type UpdateAuctionRequest struct {
-	Title       string   `json:"title"       validate:"omitempty,min=2,max=255"`
-	Name        string   `json:"name"        validate:"omitempty,min=2,max=255"`
-	Description string   `json:"description" validate:"omitempty"`
-	ImageURL    string   `json:"imageUrl"    validate:"omitempty"`
-	ImageURLs   []string `json:"imageUrls"   validate:"omitempty"`
-	VideoURL    string   `json:"videoUrl"    validate:"omitempty"`
-	EntranceFee float64  `json:"entranceFee" validate:"omitempty,gt=0"`
-	MinBidValue float64  `json:"minBidValue" validate:"omitempty,gt=0"`
-	MaxBidValue *float64 `json:"maxBidValue" validate:"omitempty,gt=0"`
-	StartAt     *string  `json:"startAt"     validate:"omitempty"`
-	CloseAt     *string  `json:"closeAt"     validate:"omitempty"`
+	Title           string   `json:"title"           validate:"omitempty,min=2,max=255"`
+	Name            string   `json:"name"            validate:"omitempty,min=2,max=255"`
+	Description     string   `json:"description"     validate:"omitempty"`
+	ImageURL        string   `json:"imageUrl"        validate:"omitempty"`
+	ImageURLs       []string `json:"imageUrls"       validate:"omitempty"`
+	VideoURL        string   `json:"videoUrl"        validate:"omitempty"`
+	EntranceFee     float64  `json:"entranceFee"     validate:"omitempty,gt=0"`
+	RetailValue     float64  `json:"retailValue"     validate:"omitempty,gte=0"`
+	MinParticipants int      `json:"minParticipants" validate:"omitempty,gte=1"`
+	MinBidValue     float64  `json:"minBidValue"     validate:"omitempty,gt=0"`
+	MaxBidValue     *float64 `json:"maxBidValue"     validate:"omitempty,gt=0"`
+	StartAt         *string  `json:"startAt"         validate:"omitempty"`
+	CloseAt         *string  `json:"closeAt"         validate:"omitempty"`
 }
 
 func normalizeAuctionImages(cover string, urls []string) (string, []string) {
@@ -102,14 +106,20 @@ func (h *AuctionAdminHandler) Create(c fiber.Ctx) error {
 	}
 
 	cover, images := normalizeAuctionImages(req.ImageURL, req.ImageURLs)
+	minParticipants := req.MinParticipants
+	if minParticipants <= 0 {
+		minParticipants = 10
+	}
 	a := &domain.Auction{
-		Title:       title,
-		Description: req.Description,
-		ImageURL:    cover,
-		ImageURLs:   images,
-		VideoURL:    req.VideoURL,
-		EntranceFee: domain.NewMoney(req.EntranceFee),
-		MinBidValue: domain.NewMoney(req.MinBidValue),
+		Title:           title,
+		Description:     req.Description,
+		ImageURL:        cover,
+		ImageURLs:       images,
+		VideoURL:        req.VideoURL,
+		EntranceFee:     domain.NewMoney(req.EntranceFee),
+		RetailValue:     domain.NewMoney(req.RetailValue),
+		MinParticipants: minParticipants,
+		MinBidValue:     domain.NewMoney(req.MinBidValue),
 	}
 	if req.MaxBidValue != nil {
 		v := domain.NewMoney(*req.MaxBidValue)
@@ -190,13 +200,15 @@ func (h *AuctionAdminHandler) Update(c fiber.Ctx) error {
 
 	cover, images := normalizeAuctionImages(req.ImageURL, req.ImageURLs)
 	updates := &domain.Auction{
-		Title:       title,
-		Description: req.Description,
-		ImageURL:    cover,
-		ImageURLs:   images,
-		VideoURL:    req.VideoURL,
-		EntranceFee: domain.NewMoney(req.EntranceFee),
-		MinBidValue: domain.NewMoney(req.MinBidValue),
+		Title:           title,
+		Description:     req.Description,
+		ImageURL:        cover,
+		ImageURLs:       images,
+		VideoURL:        req.VideoURL,
+		EntranceFee:     domain.NewMoney(req.EntranceFee),
+		RetailValue:     domain.NewMoney(req.RetailValue),
+		MinParticipants: req.MinParticipants,
+		MinBidValue:     domain.NewMoney(req.MinBidValue),
 	}
 	if req.MaxBidValue != nil {
 		v := domain.NewMoney(*req.MaxBidValue)

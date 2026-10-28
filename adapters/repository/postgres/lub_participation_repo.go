@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/google/uuid"
@@ -76,5 +77,13 @@ func (r *AuctionParticipationRepository) UpdateStatus(id uuid.UUID, status strin
 func (r *AuctionParticipationRepository) CountByAuction(auctionID uuid.UUID) (int64, error) {
 	var count int64
 	err := r.db.Model(&domain.AuctionParticipation{}).Where("auction_id = ? AND status = 'active'", auctionID).Count(&count).Error
+	return count, err
+}
+
+func (r *AuctionParticipationRepository) CountByAuctionSince(auctionID uuid.UUID, since time.Time) (int64, error) {
+	var count int64
+	err := r.db.Model(&domain.AuctionParticipation{}).
+		Where("auction_id = ? AND status = 'active' AND created_at >= ?", auctionID, since).
+		Count(&count).Error
 	return count, err
 }

@@ -1,6 +1,8 @@
 package ports
 
 import (
+	"time"
+
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/google/uuid"
 )
@@ -27,6 +29,7 @@ type AuctionParticipationRepository interface {
 	ListByParticipant(participantID string, limit, offset int) ([]domain.AuctionParticipation, int64, error)
 	UpdateStatus(id uuid.UUID, status string) error
 	CountByAuction(auctionID uuid.UUID) (int64, error)
+	CountByAuctionSince(auctionID uuid.UUID, since time.Time) (int64, error)
 }
 
 // BidRepository manages the secret bid values participants place.

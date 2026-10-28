@@ -18,6 +18,9 @@ func (s *Service) CreateAuction(ctx context.Context, a *domain.Auction, createdB
 	if a.MinBidValue.IsZero() {
 		a.MinBidValue = domain.NewMoney(0.01)
 	}
+	if a.MinParticipants <= 0 {
+		a.MinParticipants = defaultMinParticipants
+	}
 	if err := s.auctionRepo.Create(a); err != nil {
 		return err
 	}
@@ -58,6 +61,12 @@ func (s *Service) UpdateAuction(ctx context.Context, id uuid.UUID, updates *doma
 	}
 	if updates.EntranceFee.IsPositive() && a.Status == domain.AuctionStatusDraft {
 		a.EntranceFee = updates.EntranceFee
+	}
+	if updates.RetailValue.IsPositive() && a.Status == domain.AuctionStatusDraft {
+		a.RetailValue = updates.RetailValue
+	}
+	if updates.MinParticipants > 0 && a.Status == domain.AuctionStatusDraft {
+		a.MinParticipants = updates.MinParticipants
 	}
 	if updates.MinBidValue.IsPositive() && a.Status == domain.AuctionStatusDraft {
 		a.MinBidValue = updates.MinBidValue

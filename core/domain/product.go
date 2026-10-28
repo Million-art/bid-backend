@@ -32,9 +32,11 @@ type Auction struct {
 	Status      AuctionStatus `gorm:"type:auction_status;not null;default:'draft';index:idx_auctions_status;index:idx_auctions_due_close,priority:1" json:"status"`
 
 	// Financials & Rules
-	EntranceFee Money  `gorm:"type:decimal(12,2);not null"              json:"entranceFee"`
-	MinBidValue Money  `gorm:"type:decimal(10,2);not null;default:0.01" json:"minBidValue"`
-	MaxBidValue *Money `gorm:"type:decimal(10,2)"                       json:"maxBidValue,omitempty"`
+	EntranceFee     Money  `gorm:"type:decimal(12,2);not null"              json:"entranceFee"`
+	RetailValue     Money  `gorm:"type:decimal(12,2);not null;default:0"   json:"retailValue"`
+	MinParticipants int    `gorm:"not null;default:10"                     json:"minParticipants"`
+	MinBidValue     Money  `gorm:"type:decimal(10,2);not null;default:0.01" json:"minBidValue"`
+	MaxBidValue     *Money `gorm:"type:decimal(10,2)"                       json:"maxBidValue,omitempty"`
 
 	// Schedule
 	StartAt    *time.Time `gorm:"column:start_at"                                                          json:"startAt,omitempty"`
@@ -47,6 +49,9 @@ type Auction struct {
 	WinnerBidValue      *Money     `gorm:"type:decimal(10,2)"                              json:"winnerBidValue,omitempty"`
 	WinnerName          string     `gorm:"-"                                               json:"winnerName,omitempty"`
 	TotalBids           int64      `gorm:"-"                                               json:"totalBids"`
+	ParticipantCount    int64      `gorm:"-"                                               json:"participantCount"`
+	UserHasJoined       bool       `gorm:"-"                                               json:"userHasJoined"`
+	CardTag             string     `gorm:"-"                                               json:"tag,omitempty"` // hot | new | almost_unlocked
 
 	CreatedBy uuid.UUID `gorm:"type:uuid;not null;index:idx_auctions_created_by" json:"createdBy"`
 	CreatedAt time.Time `gorm:"index:idx_auctions_created_at"                    json:"createdAt"`
@@ -54,6 +59,28 @@ type Auction struct {
 
 	// Relations
 	Creator *User `gorm:"foreignKey:CreatedBy;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
+}
+
+// PublicAuctionCard is the list/card payload: no live bid values.
+type PublicAuctionCard struct {
+	ID               uuid.UUID     `json:"id"`
+	Title            string        `json:"title"`
+	Description      string        `json:"description,omitempty"`
+	ImageURL         string        `json:"imageUrl,omitempty"`
+	ImageURLs        []string      `json:"imageUrls,omitempty"`
+	VideoURL         string        `json:"videoUrl,omitempty"`
+	Status           AuctionStatus `json:"status"`
+	EntranceFee      Money         `json:"entranceFee"`
+	RetailValue      Money         `json:"retailValue"`
+	MinParticipants  int           `json:"minParticipants"`
+	ParticipantCount int64         `json:"participantCount"`
+	CloseAt          *time.Time    `json:"closeAt,omitempty"`
+	EndsAt           *time.Time    `json:"endsAt,omitempty"`
+	CreatedAt        time.Time     `json:"createdAt"`
+	UserHasJoined    bool          `json:"userHasJoined"`
+	Tag              string        `json:"tag,omitempty"`
+	WinnerName       string        `json:"winnerName,omitempty"`
+	PrizeUnlocked    bool          `json:"prizeUnlocked"`
 }
 
 func (Auction) TableName() string { return "auctions" }
