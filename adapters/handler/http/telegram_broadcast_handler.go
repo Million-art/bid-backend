@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/bid-hub/admin-backend/adapters/handler/response"
@@ -10,7 +11,6 @@ import (
 	"github.com/bid-hub/admin-backend/core/services"
 	"github.com/bid-hub/admin-backend/platform/validate"
 	"github.com/gofiber/fiber/v3"
-	"github.com/google/uuid"
 )
 
 type TelegramBroadcastHandler struct {
@@ -110,7 +110,8 @@ type shareContactRequest struct {
 	Username   string `json:"username"`
 }
 
-// ShareContact saves a phone shared from the Telegram Mini App onto users.
+// ShareContact registers (or links) a Mini App contact onto users:
+// new phone → create user; existing web phone → attach telegram_id + username.
 func (h *TelegramBroadcastHandler) ShareContact(c fiber.Ctx) error {
 	var req shareContactRequest
 	if err := validate.BindAndValidate(c, &req); err != nil {
@@ -128,34 +129,20 @@ func (h *TelegramBroadcastHandler) ShareContact(c fiber.Ctx) error {
 		normalized,
 	)
 	if err != nil {
-		return response.Error(c, fiber.StatusInternalServerError, "Failed to save contact", err)
-	}
-
-	// If a different logged-in account is open, also attach phone/telegram when blank.
-	if uid := strings.TrimSpace(GetUserID(c)); uid != "" {
-		if userID, err := uuid.Parse(uid); err == nil && user != nil && user.ID != userID {
-			if loggedIn, err := h.users.GetByID(userID); err == nil && loggedIn != nil {
-				changed := false
-				if strings.TrimSpace(loggedIn.Phone) == "" {
-					loggedIn.Phone = normalized
-					changed = true
-				}
-				if loggedIn.TelegramID == nil {
-					tg := req.TelegramID
-					loggedIn.TelegramID = &tg
-					changed = true
-				}
-				if changed {
-					_ = h.users.Update(loggedIn)
-				}
-			}
+		if errors.Is(err, domain.ErrConflict) {
+			return response.Error(c, fiber.StatusConflict, "This phone is already linked to another Telegram account", err)
 		}
+		if errors.Is(err, domain.ErrInvalidInput) {
+			return response.Error(c, fiber.StatusBadRequest, "Invalid Telegram contact", err)
+		}
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to save contact", err)
 	}
 
 	return response.Success(c, fiber.StatusOK, "Contact saved", fiber.Map{
 		"telegramId": req.TelegramID,
 		"phone":      normalized,
 		"userId":     user.ID,
+		"joinedVia":  user.JoinedVia,
 	})
 }
 

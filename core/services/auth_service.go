@@ -982,10 +982,104 @@ func (s *AuthService) VerifyTelegramLogin(payload TelegramAuthPayload) error {
 }
 
 func (s *AuthService) TelegramLogin(ctx context.Context, payload TelegramAuthPayload, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
-	log := logger.FromContext(ctx)
 	if err := s.VerifyTelegramLogin(payload); err != nil {
 		return "", "", nil, err
 	}
+	return s.completeTelegramLogin(ctx, payload, auditCtx)
+}
+
+// TelegramWebAppLogin authenticates a Mini App session using Telegram.WebApp.initData.
+// The Login Widget iframe does not work reliably inside Telegram's WebView — use this instead.
+func (s *AuthService) TelegramWebAppLogin(ctx context.Context, initData string, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
+	payload, err := s.VerifyTelegramWebAppInitData(initData)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return s.completeTelegramLogin(ctx, *payload, auditCtx)
+}
+
+// VerifyTelegramWebAppInitData validates Mini App initData per Telegram docs
+// (HMAC-SHA256 with secret_key = HMAC_SHA256(bot_token, "WebAppData")).
+func (s *AuthService) VerifyTelegramWebAppInitData(initData string) (*TelegramAuthPayload, error) {
+	if !s.TelegramEnabled() {
+		return nil, domain.NewAppError(503, "Telegram login is not configured", nil)
+	}
+	initData = strings.TrimSpace(initData)
+	if initData == "" {
+		return nil, domain.NewAppError(400, "Telegram initData is required", nil)
+	}
+
+	values, err := url.ParseQuery(initData)
+	if err != nil {
+		return nil, domain.NewAppError(400, "Invalid Telegram initData", err)
+	}
+	hash := strings.TrimSpace(values.Get("hash"))
+	if hash == "" {
+		return nil, domain.NewAppError(400, "Invalid Telegram initData", nil)
+	}
+	values.Del("hash")
+	// signature is used by some clients; ignore for classic hash validation.
+	values.Del("signature")
+
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+values.Get(k))
+	}
+	dataCheckString := strings.Join(parts, "\n")
+
+	secretMac := hmac.New(sha256.New, []byte(strings.TrimSpace(s.config.TelegramBotToken)))
+	_, _ = secretMac.Write([]byte("WebAppData"))
+	secretKey := secretMac.Sum(nil)
+
+	mac := hmac.New(sha256.New, secretKey)
+	_, _ = mac.Write([]byte(dataCheckString))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(strings.ToLower(expected)), []byte(strings.ToLower(hash))) {
+		return nil, domain.NewAppError(401, "Invalid Telegram WebApp signature", nil)
+	}
+
+	authDate, _ := strconv.ParseInt(values.Get("auth_date"), 10, 64)
+	if authDate <= 0 {
+		return nil, domain.NewAppError(400, "Invalid Telegram initData", nil)
+	}
+	authAt := time.Unix(authDate, 0)
+	if time.Since(authAt) > telegramAuthMaxAge || authAt.After(time.Now().Add(5*time.Minute)) {
+		return nil, domain.NewAppError(401, "Telegram login data expired", nil)
+	}
+
+	userRaw := strings.TrimSpace(values.Get("user"))
+	if userRaw == "" {
+		return nil, domain.NewAppError(400, "Telegram user missing from initData", nil)
+	}
+	var tgUser struct {
+		ID        int64  `json:"id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Username  string `json:"username"`
+		PhotoURL  string `json:"photo_url"`
+	}
+	if err := json.Unmarshal([]byte(userRaw), &tgUser); err != nil || tgUser.ID <= 0 {
+		return nil, domain.NewAppError(400, "Invalid Telegram user in initData", err)
+	}
+
+	return &TelegramAuthPayload{
+		ID:        tgUser.ID,
+		FirstName: tgUser.FirstName,
+		LastName:  tgUser.LastName,
+		Username:  tgUser.Username,
+		PhotoURL:  tgUser.PhotoURL,
+		AuthDate:  authDate,
+		Hash:      hash,
+	}, nil
+}
+
+func (s *AuthService) completeTelegramLogin(ctx context.Context, payload TelegramAuthPayload, auditCtx *domain.AuditContext) (string, string, *domain.User, error) {
+	log := logger.FromContext(ctx)
 
 	user, err := s.userRepo.GetByTelegramID(payload.ID)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
@@ -1058,7 +1152,6 @@ func (s *AuthService) TelegramLogin(ctx context.Context, payload TelegramAuthPay
 			return "", "", nil, domain.NewAppError(403, "Account is suspended", nil)
 		}
 
-		// Keep username fresh when the user changes it on Telegram.
 		if u := strings.TrimSpace(payload.Username); u != "" && u != user.TelegramUsername {
 			user.TelegramUsername = u
 			_ = s.userRepo.Update(user)

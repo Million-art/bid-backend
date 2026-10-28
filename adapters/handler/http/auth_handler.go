@@ -66,13 +66,17 @@ type GoogleLoginRequest struct {
 }
 
 type TelegramLoginRequest struct {
-	ID        int64  `json:"id" validate:"required"`
-	FirstName string `json:"first_name" validate:"required"`
+	// Mini App path — preferred inside Telegram WebView.
+	InitData string `json:"initData"`
+
+	// Login Widget path (external browser).
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Username  string `json:"username"`
 	PhotoURL  string `json:"photo_url"`
-	AuthDate  int64  `json:"auth_date" validate:"required"`
-	Hash      string `json:"hash" validate:"required"`
+	AuthDate  int64  `json:"auth_date"`
+	Hash      string `json:"hash"`
 }
 
 type ResetPasswordOTPRequest struct {
@@ -183,20 +187,34 @@ func (h *AuthHandler) GoogleLogin(c fiber.Ctx) error {
 // @Router /api/auth/telegram [post]
 func (h *AuthHandler) TelegramLogin(c fiber.Ctx) error {
 	var req TelegramLoginRequest
-	if err := validate.BindAndValidate(c, &req); err != nil {
-		return err
+	if err := c.Bind().Body(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "Invalid request body", err)
 	}
 
 	auditCtx := domain.AuditContext(GetAuditContext(c))
-	accessToken, refreshToken, user, err := h.authService.TelegramLogin(c.Context(), services.TelegramAuthPayload{
-		ID:        req.ID,
-		FirstName: req.FirstName,
-		LastName:  req.LastName,
-		Username:  req.Username,
-		PhotoURL:  req.PhotoURL,
-		AuthDate:  req.AuthDate,
-		Hash:      req.Hash,
-	}, &auditCtx)
+	var (
+		accessToken  string
+		refreshToken string
+		user         *domain.User
+		err          error
+	)
+
+	if initData := strings.TrimSpace(req.InitData); initData != "" {
+		accessToken, refreshToken, user, err = h.authService.TelegramWebAppLogin(c.Context(), initData, &auditCtx)
+	} else {
+		if req.ID <= 0 || strings.TrimSpace(req.Hash) == "" || req.AuthDate <= 0 || strings.TrimSpace(req.FirstName) == "" {
+			return response.Error(c, fiber.StatusBadRequest, "Telegram login payload is incomplete", nil)
+		}
+		accessToken, refreshToken, user, err = h.authService.TelegramLogin(c.Context(), services.TelegramAuthPayload{
+			ID:        req.ID,
+			FirstName: req.FirstName,
+			LastName:  req.LastName,
+			Username:  req.Username,
+			PhotoURL:  req.PhotoURL,
+			AuthDate:  req.AuthDate,
+			Hash:      req.Hash,
+		}, &auditCtx)
+	}
 	if err != nil {
 		Logger(c).Error("Telegram login failed", "error", err)
 		var appErr *domain.AppError

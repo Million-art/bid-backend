@@ -137,8 +137,10 @@ func (r *UserRepo) ListTelegramIDs() ([]int64, error) {
 	return ids, err
 }
 
-// UpsertTelegramProfile updates an existing Telegram-linked user, or creates a
-// participant account the same way Telegram Login Widget signup does.
+// UpsertTelegramProfile links a Telegram identity onto users:
+//  1. Existing user with this telegram_id → refresh username / phone / name
+//  2. Else existing web user with this phone → attach telegram_id + username
+//  3. Else register a new participant
 func (r *UserRepo) UpsertTelegramProfile(telegramID int64, username, fullName, phone string) (*domain.User, error) {
 	if telegramID <= 0 {
 		return nil, domain.ErrInvalidInput
@@ -147,31 +149,56 @@ func (r *UserRepo) UpsertTelegramProfile(telegramID int64, username, fullName, p
 	fullName = strings.TrimSpace(fullName)
 	phone = strings.TrimSpace(phone)
 
-	user, err := r.GetByTelegramID(telegramID)
+	byTG, err := r.GetByTelegramID(telegramID)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
 	}
-
-	if user != nil {
+	if byTG != nil {
 		changed := false
-		if username != "" && user.TelegramUsername != username {
-			user.TelegramUsername = username
+		if username != "" && byTG.TelegramUsername != username {
+			byTG.TelegramUsername = username
 			changed = true
 		}
-		if fullName != "" && (user.FullName == "" || strings.HasPrefix(user.FullName, "Telegram User")) {
-			user.FullName = fullName
+		if fullName != "" && (byTG.FullName == "" || strings.HasPrefix(byTG.FullName, "Telegram User")) {
+			byTG.FullName = fullName
 			changed = true
 		}
-		if phone != "" && strings.TrimSpace(user.Phone) == "" {
-			user.Phone = phone
+		if phone != "" && strings.TrimSpace(byTG.Phone) == "" {
+			byTG.Phone = phone
 			changed = true
 		}
 		if changed {
-			if err := r.Update(user); err != nil {
+			if err := r.Update(byTG); err != nil {
 				return nil, err
 			}
 		}
-		return user, nil
+		return byTG, nil
+	}
+
+	// Phone already belongs to a web (or other) account → attach Telegram details.
+	if phone != "" {
+		byPhone, err := r.GetByPhone(phone)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return nil, err
+		}
+		if byPhone != nil {
+			if byPhone.TelegramID != nil && *byPhone.TelegramID > 0 && *byPhone.TelegramID != telegramID {
+				// Phone already tied to a different Telegram account.
+				return nil, domain.ErrConflict
+			}
+			tgID := telegramID
+			byPhone.TelegramID = &tgID
+			if username != "" {
+				byPhone.TelegramUsername = username
+			}
+			if fullName != "" && (byPhone.FullName == "" || strings.HasPrefix(byPhone.FullName, "Telegram User")) {
+				byPhone.FullName = fullName
+			}
+			if err := r.Update(byPhone); err != nil {
+				return nil, err
+			}
+			return byPhone, nil
+		}
 	}
 
 	if fullName == "" {
@@ -186,7 +213,7 @@ func (r *UserRepo) UpsertTelegramProfile(telegramID int64, username, fullName, p
 		return nil, err
 	}
 	tgID := telegramID
-	user = &domain.User{
+	user := &domain.User{
 		ID:               uuid.New(),
 		FullName:         fullName,
 		Email:            "tg_" + strconv.FormatInt(telegramID, 10) + "@carramarket.com",

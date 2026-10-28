@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -89,5 +90,38 @@ func TestVerifyTelegramLogin_Expired(t *testing.T) {
 	p.Hash = signTelegramPayload(token, p)
 	if err := svc.VerifyTelegramLogin(p); err == nil {
 		t.Fatal("expected expired error")
+	}
+}
+
+func TestVerifyTelegramWebAppInitData_Valid(t *testing.T) {
+	token := "123456:ABC-DEF"
+	svc := &AuthService{config: &env.Config{TelegramBotToken: token}}
+	authDate := strconv.FormatInt(time.Now().Unix(), 10)
+	userJSON := `{"id":42,"first_name":"Ada","username":"ada"}`
+	fields := map[string]string{
+		"auth_date": authDate,
+		"user":      userJSON,
+	}
+	keys := []string{"auth_date", "user"}
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+fields[k])
+	}
+	dataCheck := parts[0] + "\n" + parts[1]
+
+	secretMac := hmac.New(sha256.New, []byte(token))
+	_, _ = secretMac.Write([]byte("WebAppData"))
+	secretKey := secretMac.Sum(nil)
+	mac := hmac.New(sha256.New, secretKey)
+	_, _ = mac.Write([]byte(dataCheck))
+	hash := hex.EncodeToString(mac.Sum(nil))
+
+	initData := "auth_date=" + authDate + "&user=" + url.QueryEscape(userJSON) + "&hash=" + hash
+	payload, err := svc.VerifyTelegramWebAppInitData(initData)
+	if err != nil {
+		t.Fatalf("expected valid initData, got %v", err)
+	}
+	if payload.ID != 42 || payload.FirstName != "Ada" || payload.Username != "ada" {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }
