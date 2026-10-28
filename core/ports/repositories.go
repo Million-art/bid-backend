@@ -24,6 +24,13 @@ type UserRepository interface {
 	GetAdmins() ([]domain.User, error)
 	Count(filter map[string]interface{}) (int64, error)
 	Delete(id uuid.UUID) error
+	ListTelegramIDs() ([]int64, error)
+}
+
+type TelegramSubscriberRepository interface {
+	Upsert(sub *domain.TelegramSubscriber) error
+	ListTelegramIDs() ([]int64, error)
+	Count() (int64, error)
 }
 
 type AuditLogRepository interface {

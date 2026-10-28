@@ -106,6 +106,7 @@ func Migrate(db *gorm.DB) {
 		&domain.Notification{},
 		&domain.AuditLog{},
 		&domain.PlatformLegalDocument{},
+		&domain.TelegramSubscriber{},
 	); err != nil {
 		slog.Error("database: automigrate failed", "error", err)
 	}

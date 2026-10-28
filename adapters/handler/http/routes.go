@@ -87,6 +87,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	bidRepo := postgres.NewBidRepository(db)
 	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, participationRepo, cacheRepo, emailService, smsService)
 	telegramPoster := telegramadapter.NewChannelPoster(cfg, slog.Default())
+	telegramSubscriberRepo := postgres.NewTelegramSubscriberRepository(db)
 	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService, telegramPoster)
 	chapaPaymentSvc := chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
@@ -106,6 +107,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	notificationHandler := NewNotificationHandler(notificationService)
 	legalDocHandler := NewLegalDocumentHandler(legalDocService)
 	paymentHandler := NewPaymentHandler(paymentLedgerSvc)
+	telegramBroadcastHandler := NewTelegramBroadcastHandler(telegramPoster, userRepo, telegramSubscriberRepo)
 
 	r2PresignService, err := r2storage.NewPresignService(cfg)
 	if err != nil {
@@ -126,8 +128,16 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	registerPaymentRoutes(protected, paymentHandler)
 	registerAdminAuctionRoutes(protected, auctionAdminHandler)
 	registerMiscRoutes(protected, dashboardHandler, mediaPresignHandler, notificationHandler, legalDocHandler)
+	registerTelegramBroadcastRoutes(api, protected, telegramBroadcastHandler)
 
 	return nil
+}
+
+func registerTelegramBroadcastRoutes(api fiber.Router, protected fiber.Router, h *TelegramBroadcastHandler) {
+	api.Post("/webhooks/telegram", h.Webhook)
+	tg := protected.Group("/telegram")
+	tg.Get("/broadcast/stats", h.Stats)
+	tg.Post("/broadcast", h.Broadcast)
 }
 
 func registerPublicRoutes(api fiber.Router, legalDocHandler *LegalDocumentHandler, authHandler *AuthHandler, limiterStorage fiber.Storage, cfg *env.Config) {

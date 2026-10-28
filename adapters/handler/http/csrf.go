@@ -53,6 +53,9 @@ func isExempt(path string) bool {
 	if strings.HasPrefix(path, "/api/webhooks/chapa") {
 		return true
 	}
+	if strings.HasPrefix(path, "/api/webhooks/telegram") {
+		return true
+	}
 	if strings.HasPrefix(path, "/api/public/payments/verify") {
 		return true
 	}

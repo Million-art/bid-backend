@@ -126,6 +126,15 @@ func (r *UserRepo) GetAdmins() ([]domain.User, error) {
 	return users, err
 }
 
+func (r *UserRepo) ListTelegramIDs() ([]int64, error) {
+	var ids []int64
+	err := r.db.Model(&domain.User{}).
+		Where("telegram_id IS NOT NULL AND telegram_id > 0").
+		Order("telegram_id ASC").
+		Pluck("telegram_id", &ids).Error
+	return ids, err
+}
+
 // GetUserCountByMonth returns new user registrations per month for the last N months.
 func (r *UserRepo) GetUserCountByMonth(lastMonths int) ([]domain.MonthlyCount, error) {
 	var result []domain.MonthlyCount
