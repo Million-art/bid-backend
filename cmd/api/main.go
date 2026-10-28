@@ -102,7 +102,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Environment-based migration: only run migrations in non-production environments
+	// Always apply safe additive patches (e.g. new columns). Full AutoMigrate stays
+	// non-production only so prod schema changes stay explicit/controlled.
+	database.EnsureSafeSchema(db)
+
 	if !isProductionEnvironment(cfg) {
 		slog.Info("Development environment - running database migrations")
 		database.Migrate(db)
@@ -112,7 +115,7 @@ func main() {
 			slog.Error("Failed to seed admin user", "error", err)
 		}
 	} else {
-		slog.Info("Production environment - using existing database, skipping migrations and seeding")
+		slog.Info("Production environment - applied safe schema patches; skipping full AutoMigrate/seed")
 	}
 
 	// 2b. Connect to Redis

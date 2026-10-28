@@ -12,10 +12,35 @@ import (
 	"gorm.io/gorm"
 )
 
+// EnsureSafeSchema applies additive, idempotent column patches that production
+// needs even when full AutoMigrate is skipped.
+func EnsureSafeSchema(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	patches := []string{
+		`ALTER TABLE auctions ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE auctions ADD COLUMN IF NOT EXISTS retail_value DECIMAL(12,2) NOT NULL DEFAULT 0`,
+		`ALTER TABLE auctions ADD COLUMN IF NOT EXISTS min_participants INTEGER NOT NULL DEFAULT 10`,
+		`UPDATE auctions
+		 SET image_urls = jsonb_build_array(image_url)
+		 WHERE (image_urls IS NULL OR image_urls = '[]'::jsonb)
+		   AND image_url IS NOT NULL
+		   AND btrim(image_url) <> ''`,
+	}
+	for _, stmt := range patches {
+		if err := db.Exec(stmt).Error; err != nil {
+			slog.Error("database: safe schema patch failed", "error", err)
+		}
+	}
+}
+
 func Migrate(db *gorm.DB) {
 	if db == nil {
 		return
 	}
+
+	EnsureSafeSchema(db)
 
 	enumMigrations := []string{
 		// 1. Create PostgreSQL ENUM types idempotently
