@@ -159,6 +159,13 @@ func registerUserRoutes(protected fiber.Router, userHandler *UserHandler, partic
 	protected.Patch("/me/password", userHandler.ChangeMyPassword)
 	protected.Get("/me/participations", auctionHandler.ListMyParticipations)
 
+	protected.Get("/users", userHandler.List)
+	users := protected.Group("/users")
+	users.Post("/", userHandler.Create)
+	users.Get("/:id", userHandler.GetByID)
+	users.Patch("/:id/status", userHandler.UpdateStatus)
+	users.Delete("/:id", userHandler.Delete)
+
 	protected.Get("/participants", participantHandler.List)
 	protected.Patch("/participants/:id/status", participantHandler.UpdateStatus)
 	protected.Delete("/participants/:id", participantHandler.Delete)

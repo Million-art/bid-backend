@@ -58,8 +58,11 @@ func (s *UserService) Create(ctx context.Context, user *domain.User, auditCtx *d
 		if err != nil {
 			log.Error("user.set_password_token_failed", "email", maskEmail(user.Email), "error", err)
 		} else {
-			// Construct the password setup link (uses ADMIN_APP_URL from env)
-			passwordSetupLink := fmt.Sprintf("%s/set-password?token=%s", strings.TrimSuffix("http://localhost:5173", "/"), token)
+			baseURL := strings.TrimSuffix(s.config.ParticipantAppURL, "/")
+			if baseURL == "" {
+				baseURL = "http://localhost:3000"
+			}
+			passwordSetupLink := fmt.Sprintf("%s/set-password?token=%s", baseURL, token)
 
 			// Send the email with complete data
 			emailErr := s.email.SendTemplateEmail(
