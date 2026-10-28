@@ -80,7 +80,16 @@ func (r *AuctionRepository) ListPublic(limit, offset int) ([]domain.Auction, int
 		return nil, 0, err
 	}
 	var auctions []domain.Auction
-	if err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&auctions).Error; err != nil {
+	// Highest participant count first; newer auctions break ties.
+	if err := q.
+		Order(`(
+			SELECT COUNT(*) FROM auction_participations ap
+			WHERE ap.auction_id = auctions.id AND ap.status = 'active'
+		) DESC`).
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&auctions).Error; err != nil {
 		return nil, 0, err
 	}
 	r.populateWinnerNames(auctions)
