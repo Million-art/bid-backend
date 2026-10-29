@@ -209,8 +209,8 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 	txRef := "R-" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20]
 
 	chargeAmount := domain.Zero()
-	for range bidPack {
-		chargeAmount = chargeAmount.Add(a.EntranceFee)
+	for _, bidMoney := range bidPack {
+		chargeAmount = chargeAmount.Add(a.EntranceFee).Add(bidMoney)
 	}
 
 	if err := h.chapaPaymentSvc.CreatePendingPayment(c.Context(), txRef, userUUID, auctionID, chargeAmount); err != nil {
@@ -287,15 +287,16 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 	}
 
 	meta := map[string]interface{}{
-		"auction_id": auctionID.String(),
-		"user_id":    userUUID.String(),
+		"auction_id":   auctionID.String(),
+		"user_id":      userUUID.String(),
 		"ticket_count": len(bidPack),
 	}
 	if len(bidValueStrings) == 1 {
 		meta["bid_value"] = bidValueStrings[0]
 	}
 	if len(bidValueStrings) > 0 {
-		meta["bid_values"] = bidValueStrings
+		// Store as comma-separated string so Chapa's flat string meta map accepts it without 400 validation errors
+		meta["bid_values"] = strings.Join(bidValueStrings, ",")
 	}
 
 	desc := "Auction entrance fee and bid"

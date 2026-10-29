@@ -120,11 +120,23 @@ func (s *Service) resolveBidValues(txRef string, snap *VerifiedSnapshot) []domai
 				return out
 			}
 		}
-		// JSON numbers sometimes decode as []any of float64; also accept []string in meta.
+		// JSON numbers sometimes decode as []any of float64; also accept []string or comma-separated string in meta.
 		if rawStrs, ok := snap.Meta["bid_values"].([]string); ok && len(rawStrs) > 0 {
 			out := make([]domain.Money, 0, len(rawStrs))
 			for _, item := range rawStrs {
 				if m, err := domain.NewMoneyFromString(strings.TrimSpace(item)); err == nil && m.IsPositive() {
+					out = append(out, m)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+		if rawCSV, ok := snap.Meta["bid_values"].(string); ok && strings.TrimSpace(rawCSV) != "" {
+			parts := strings.Split(rawCSV, ",")
+			out := make([]domain.Money, 0, len(parts))
+			for _, part := range parts {
+				if m, err := domain.NewMoneyFromString(strings.TrimSpace(part)); err == nil && m.IsPositive() {
 					out = append(out, m)
 				}
 			}
