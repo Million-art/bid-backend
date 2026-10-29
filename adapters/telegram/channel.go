@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -47,6 +48,11 @@ func NewChannelPoster(cfg *env.Config, log *slog.Logger) *ChannelPoster {
 	if cfg != nil {
 		token = strings.TrimSpace(cfg.TelegramBotToken)
 		channel = strings.TrimSpace(cfg.TelegramChannelID)
+		if channel != "" && !strings.HasPrefix(channel, "@") && !strings.HasPrefix(channel, "-") {
+			if _, err := strconv.ParseInt(channel, 10, 64); err != nil {
+				channel = "@" + channel
+			}
+		}
 		botUser = strings.TrimPrefix(strings.TrimSpace(cfg.TelegramBotUsername), "@")
 		adminID = strings.TrimSpace(cfg.TelegramAdminID)
 	}
@@ -115,11 +121,12 @@ func (p *ChannelPoster) PostAuctionPublished(ctx context.Context, a *domain.Auct
 		p.log.Error("telegram_channel_post_failed",
 			"auction_id", a.ID.String(),
 			"title", a.Title,
+			"channel", p.channel,
 			"error", err,
 		)
 		p.notifyAdmin(ctx, fmt.Sprintf(
-			"Failed to post auction to channel.\nAuction: %s (%s)\nError: %s",
-			a.Title, a.ID.String(), err.Error(),
+			"Failed to post auction to channel (Channel: %s).\nAuction: %s (%s)\nError: %s",
+			p.channel, a.Title, a.ID.String(), err.Error(),
 		))
 		return err
 	}
