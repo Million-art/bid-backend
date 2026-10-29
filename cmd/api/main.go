@@ -201,7 +201,8 @@ func main() {
 	}
 
 	rawOrigins := strings.Split(corsOrigins, ",")
-	origins := make([]string, 0, len(rawOrigins))
+	origins := make([]string, 0, len(rawOrigins)+3)
+	originSeen := make(map[string]struct{}, len(rawOrigins)+3)
 	for _, raw := range rawOrigins {
 		o := strings.TrimSpace(raw)
 		if o == "" || o == "*" {
@@ -210,11 +211,32 @@ func main() {
 			}
 			continue
 		}
-		origins = append(origins, o)
+		if _, ok := originSeen[o]; !ok {
+			originSeen[o] = struct{}{}
+			origins = append(origins, o)
+		}
+	}
+	for _, tgOrigin := range []string{
+		"https://web.telegram.org",
+		"https://webk.telegram.org",
+		"https://webz.telegram.org",
+	} {
+		if _, ok := originSeen[tgOrigin]; !ok {
+			originSeen[tgOrigin] = struct{}{}
+			origins = append(origins, tgOrigin)
+		}
 	}
 	if len(origins) == 0 {
 		slog.Error("admin-backend: no valid CORS origins configured. Set CORS_ORIGINS to a comma-separated list of explicit origins (wildcards are not permitted with credentialed CORS).")
 		os.Exit(1)
+	}
+
+	isTelegramOrigin := func(origin string) bool {
+		if !strings.HasPrefix(origin, "https://") {
+			return false
+		}
+		host := strings.TrimPrefix(origin, "https://")
+		return host == "telegram.org" || strings.HasSuffix(host, ".telegram.org")
 	}
 
 	// Ensure CORS headers are present even on error responses (e.g. 5xx),
@@ -228,6 +250,9 @@ func main() {
 			if allowed == o {
 				return o, true
 			}
+		}
+		if isTelegramOrigin(o) {
+			return o, true
 		}
 		return "", false
 	}
@@ -249,7 +274,10 @@ func main() {
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     origins,
+		AllowOriginsFunc: func(origin string) bool {
+			_, ok := allowedOrigin(origin)
+			return ok
+		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-CSRF-Token", "X-Requested-With", "X-Client-Secret"},
 		AllowCredentials: true,

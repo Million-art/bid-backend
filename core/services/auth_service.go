@@ -25,6 +25,7 @@ import (
 	"github.com/bid-hub/admin-backend/platform/logger"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	initdata "github.com/telegram-mini-apps/init-data-golang"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -1009,73 +1010,35 @@ func (s *AuthService) VerifyTelegramWebAppInitData(initData string) (*TelegramAu
 		return nil, domain.NewAppError(400, "Telegram initData is required", nil)
 	}
 
-	values, err := url.ParseQuery(initData)
+	token := strings.TrimSpace(s.config.TelegramBotToken)
+	if err := initdata.Validate(initData, token, telegramAuthMaxAge); err != nil {
+		if errors.Is(err, initdata.ErrExpired) {
+			return nil, domain.NewAppError(401, "Telegram login data expired", err)
+		}
+		if errors.Is(err, initdata.ErrAuthDateMissing) ||
+			errors.Is(err, initdata.ErrSignMissing) ||
+			errors.Is(err, initdata.ErrUnexpectedFormat) {
+			return nil, domain.NewAppError(400, "Invalid Telegram initData", err)
+		}
+		return nil, domain.NewAppError(401, "Invalid Telegram WebApp signature", err)
+	}
+
+	parsed, err := initdata.Parse(initData)
 	if err != nil {
 		return nil, domain.NewAppError(400, "Invalid Telegram initData", err)
 	}
-	hash := strings.TrimSpace(values.Get("hash"))
-	if hash == "" {
-		return nil, domain.NewAppError(400, "Invalid Telegram initData", nil)
-	}
-	values.Del("hash")
-	// Ed25519 third-party signature — not used for bot-token hash validation.
-	values.Del("signature")
-
-	keys := make([]string, 0, len(values))
-	for k := range values {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+values.Get(k))
-	}
-	dataCheckString := strings.Join(parts, "\n")
-
-	// Key MUST be the constant "WebAppData"; message is the bot token.
-	secretMac := hmac.New(sha256.New, []byte("WebAppData"))
-	_, _ = secretMac.Write([]byte(strings.TrimSpace(s.config.TelegramBotToken)))
-	secretKey := secretMac.Sum(nil)
-
-	mac := hmac.New(sha256.New, secretKey)
-	_, _ = mac.Write([]byte(dataCheckString))
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(strings.ToLower(expected)), []byte(strings.ToLower(hash))) {
-		return nil, domain.NewAppError(401, "Invalid Telegram WebApp signature", nil)
-	}
-
-	authDate, _ := strconv.ParseInt(values.Get("auth_date"), 10, 64)
-	if authDate <= 0 {
-		return nil, domain.NewAppError(400, "Invalid Telegram initData", nil)
-	}
-	authAt := time.Unix(authDate, 0)
-	if time.Since(authAt) > telegramAuthMaxAge || authAt.After(time.Now().Add(5*time.Minute)) {
-		return nil, domain.NewAppError(401, "Telegram login data expired", nil)
-	}
-
-	userRaw := strings.TrimSpace(values.Get("user"))
-	if userRaw == "" {
+	if parsed.User.ID <= 0 {
 		return nil, domain.NewAppError(400, "Telegram user missing from initData", nil)
-	}
-	var tgUser struct {
-		ID        int64  `json:"id"`
-		FirstName string `json:"first_name"`
-		LastName  string `json:"last_name"`
-		Username  string `json:"username"`
-		PhotoURL  string `json:"photo_url"`
-	}
-	if err := json.Unmarshal([]byte(userRaw), &tgUser); err != nil || tgUser.ID <= 0 {
-		return nil, domain.NewAppError(400, "Invalid Telegram user in initData", err)
 	}
 
 	return &TelegramAuthPayload{
-		ID:        tgUser.ID,
-		FirstName: tgUser.FirstName,
-		LastName:  tgUser.LastName,
-		Username:  tgUser.Username,
-		PhotoURL:  tgUser.PhotoURL,
-		AuthDate:  authDate,
-		Hash:      hash,
+		ID:        parsed.User.ID,
+		FirstName: parsed.User.FirstName,
+		LastName:  parsed.User.LastName,
+		Username:  parsed.User.Username,
+		PhotoURL:  parsed.User.PhotoURL,
+		AuthDate:  int64(parsed.AuthDateRaw),
+		Hash:      parsed.Hash,
 	}, nil
 }
 
