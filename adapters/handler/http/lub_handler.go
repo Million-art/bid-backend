@@ -99,20 +99,39 @@ type UpdateBidRequest struct {
 }
 
 func (h *AuctionHandler) ListPublicAuctions(c fiber.Ctx) error {
-	page, limit, _, err := validate.BindPagination(c, 1, 20, 100)
+	page, limit, offset, err := validate.BindPagination(c, 1, 12, 100)
 	if err != nil {
 		return err
 	}
+	status := strings.TrimSpace(c.Query("status"))
+	search := strings.TrimSpace(c.Query("search"))
+	sortBy := strings.TrimSpace(c.Query("sort"))
 	viewerID := strings.TrimSpace(GetUserID(c))
-	cards, total, err := h.svc.ListPublicAuctionCards(page, limit, viewerID)
+
+	cards, total, statusCounts, err := h.svc.ListPublicAuctionCardsFiltered(ports.PublicAuctionFilter{
+		Status: status,
+		Search: search,
+		Sort:   sortBy,
+		Limit:  limit,
+		Offset: offset,
+	}, viewerID)
 	if err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to list auctions", err)
 	}
+	totalPages := int64(0)
+	if limit > 0 && total > 0 {
+		totalPages = (total + int64(limit) - 1) / int64(limit)
+	}
+	hasMore := int64(page) < totalPages
+
 	return response.Success(c, fiber.StatusOK, "Auctions retrieved", fiber.Map{
-		"items": cards,
-		"total": total,
-		"page":  page,
-		"limit": limit,
+		"items":        cards,
+		"total":        total,
+		"page":         page,
+		"limit":        limit,
+		"totalPages":   totalPages,
+		"hasMore":      hasMore,
+		"statusCounts": statusCounts,
 	})
 }
 

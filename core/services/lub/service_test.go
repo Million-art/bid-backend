@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
+	"github.com/bid-hub/admin-backend/core/ports"
 	"github.com/google/uuid"
 )
 
@@ -47,6 +48,9 @@ func (m *mockAuctionRepo) List(status, search string, l, o int) ([]domain.Auctio
 }
 func (m *mockAuctionRepo) ListPublic(l, o int) ([]domain.Auction, int64, error) {
 	return nil, 0, nil
+}
+func (m *mockAuctionRepo) ListPublicFiltered(filter ports.PublicAuctionFilter) ([]domain.Auction, int64, map[string]int64, error) {
+	return nil, 0, nil, nil
 }
 func (m *mockAuctionRepo) ListDueForClose() ([]domain.Auction, error) {
 	if m.listDueFn != nil {
@@ -106,6 +110,15 @@ func (m *mockPartRepo) CountByAuction(auctionID uuid.UUID) (int64, error) {
 }
 func (m *mockPartRepo) CountByAuctionSince(auctionID uuid.UUID, since time.Time) (int64, error) {
 	return 0, nil
+}
+func (m *mockPartRepo) CountByAuctions(auctionIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	return nil, nil
+}
+func (m *mockPartRepo) CountByAuctionsSince(auctionIDs []uuid.UUID, since time.Time) (map[uuid.UUID]int64, error) {
+	return nil, nil
+}
+func (m *mockPartRepo) JoinedAuctionSet(auctionIDs []uuid.UUID, participantID string) (map[uuid.UUID]bool, error) {
+	return nil, nil
 }
 
 type mockBidRepo struct {

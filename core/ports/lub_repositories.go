@@ -7,6 +7,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// PublicAuctionFilter defines server-side filtering, sorting, and pagination for public auctions.
+type PublicAuctionFilter struct {
+	Status string
+	Search string
+	Sort   string
+	Limit  int
+	Offset int
+}
+
 // AuctionRepository manages Lowest Unique Bid auctions.
 type AuctionRepository interface {
 	Create(a *domain.Auction) error
@@ -15,6 +24,7 @@ type AuctionRepository interface {
 	UpdateStatus(id uuid.UUID, status domain.AuctionStatus) error
 	List(status string, search string, limit, offset int) ([]domain.Auction, int64, error)
 	ListPublic(limit, offset int) ([]domain.Auction, int64, error)
+	ListPublicFiltered(filter PublicAuctionFilter) ([]domain.Auction, int64, map[string]int64, error)
 	// ListDueForClose returns active auctions whose close_at has passed (for the scheduler).
 	ListDueForClose() ([]domain.Auction, error)
 	Delete(id uuid.UUID) error
@@ -30,6 +40,9 @@ type AuctionParticipationRepository interface {
 	UpdateStatus(id uuid.UUID, status string) error
 	CountByAuction(auctionID uuid.UUID) (int64, error)
 	CountByAuctionSince(auctionID uuid.UUID, since time.Time) (int64, error)
+	CountByAuctions(auctionIDs []uuid.UUID) (map[uuid.UUID]int64, error)
+	CountByAuctionsSince(auctionIDs []uuid.UUID, since time.Time) (map[uuid.UUID]int64, error)
+	JoinedAuctionSet(auctionIDs []uuid.UUID, participantID string) (map[uuid.UUID]bool, error)
 }
 
 // BidRepository manages the secret bid values participants place.

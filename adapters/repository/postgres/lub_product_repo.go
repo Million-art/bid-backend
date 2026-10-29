@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
+	"github.com/bid-hub/admin-backend/core/ports"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -68,32 +69,109 @@ func (r *AuctionRepository) List(status, search string, limit, offset int) ([]do
 }
 
 func (r *AuctionRepository) ListPublic(limit, offset int) ([]domain.Auction, int64, error) {
-	q := r.db.Model(&domain.Auction{}).
-		Where("status IN ?", []string{
+	auctions, total, _, err := r.ListPublicFiltered(ports.PublicAuctionFilter{
+		Limit:  limit,
+		Offset: offset,
+	})
+	return auctions, total, err
+}
+
+func (r *AuctionRepository) ListPublicFiltered(filter ports.PublicAuctionFilter) ([]domain.Auction, int64, map[string]int64, error) {
+	publicStatuses := []string{
+		string(domain.AuctionStatusActive),
+		string(domain.AuctionStatusPostponed),
+		string(domain.AuctionStatusClosed),
+		string(domain.AuctionStatusExecuted),
+	}
+
+	// Compute status counts (filtered by search if provided, across all public statuses)
+	statusCounts := map[string]int64{
+		"all":      0,
+		"active":   0,
+		"closed":   0,
+		"executed": 0,
+	}
+	countBase := r.db.Model(&domain.Auction{}).Where("status IN ?", publicStatuses)
+	if s := strings.TrimSpace(filter.Search); s != "" {
+		like := "%" + s + "%"
+		countBase = countBase.Where("(title ILIKE ? OR description ILIKE ?)", like, like)
+	}
+	type statusCountRow struct {
+		Status string `gorm:"column:status"`
+		Total  int64  `gorm:"column:total"`
+	}
+	var scRows []statusCountRow
+	if err := countBase.Select("status, COUNT(*) AS total").Group("status").Scan(&scRows).Error; err == nil {
+		var allCount int64
+		for _, row := range scRows {
+			allCount += row.Total
+			switch strings.ToLower(strings.TrimSpace(row.Status)) {
+			case "active", "postponed":
+				statusCounts["active"] += row.Total
+			case "closed":
+				statusCounts["closed"] += row.Total
+			case "executed":
+				statusCounts["executed"] += row.Total
+			}
+		}
+		statusCounts["all"] = allCount
+	}
+
+	q := r.db.Model(&domain.Auction{})
+	switch strings.ToLower(strings.TrimSpace(filter.Status)) {
+	case "active", "live":
+		q = q.Where("status IN ?", []string{
 			string(domain.AuctionStatusActive),
 			string(domain.AuctionStatusPostponed),
-			string(domain.AuctionStatusClosed),
-			string(domain.AuctionStatusExecuted),
 		})
+	case "postponed":
+		q = q.Where("status = ?", string(domain.AuctionStatusPostponed))
+	case "closed":
+		q = q.Where("status = ?", string(domain.AuctionStatusClosed))
+	case "executed", "completed":
+		q = q.Where("status = ?", string(domain.AuctionStatusExecuted))
+	default:
+		q = q.Where("status IN ?", publicStatuses)
+	}
+
+	if s := strings.TrimSpace(filter.Search); s != "" {
+		like := "%" + s + "%"
+		q = q.Where("(title ILIKE ? OR description ILIKE ?)", like, like)
+	}
+
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, err
+		return nil, 0, statusCounts, err
 	}
+
+	switch strings.ToLower(strings.TrimSpace(filter.Sort)) {
+	case "newest":
+		q = q.Order("created_at DESC")
+	case "closing_soon":
+		q = q.Order("CASE WHEN status IN ('active', 'postponed') THEN 0 ELSE 1 END ASC").
+			Order("close_at ASC NULLS LAST").
+			Order("created_at DESC")
+	case "fee_asc":
+		q = q.Order("entrance_fee ASC").Order("created_at DESC")
+	case "fee_desc":
+		q = q.Order("entrance_fee DESC").Order("created_at DESC")
+	default:
+		// Prioritize live auctions first, then highest participant count, then newest.
+		q = q.
+			Order("CASE WHEN status IN ('active', 'postponed') THEN 0 WHEN status = 'closed' THEN 1 ELSE 2 END ASC").
+			Order(`(
+				SELECT COUNT(*) FROM auction_participations ap
+				WHERE ap.auction_id = auctions.id AND ap.status = 'active'
+			) DESC`).
+			Order("created_at DESC")
+	}
+
 	var auctions []domain.Auction
-	// Highest participant count first; newer auctions break ties.
-	if err := q.
-		Order(`(
-			SELECT COUNT(*) FROM auction_participations ap
-			WHERE ap.auction_id = auctions.id AND ap.status = 'active'
-		) DESC`).
-		Order("created_at DESC").
-		Limit(limit).
-		Offset(offset).
-		Find(&auctions).Error; err != nil {
-		return nil, 0, err
+	if err := q.Limit(filter.Limit).Offset(filter.Offset).Find(&auctions).Error; err != nil {
+		return nil, 0, statusCounts, err
 	}
 	r.populateWinnerNames(auctions)
-	return auctions, total, nil
+	return auctions, total, statusCounts, nil
 }
 
 func (r *AuctionRepository) populateWinnerNames(auctions []domain.Auction) {

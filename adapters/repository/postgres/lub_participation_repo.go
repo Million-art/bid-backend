@@ -87,3 +87,66 @@ func (r *AuctionParticipationRepository) CountByAuctionSince(auctionID uuid.UUID
 		Count(&count).Error
 	return count, err
 }
+
+func (r *AuctionParticipationRepository) CountByAuctions(auctionIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	out := make(map[uuid.UUID]int64, len(auctionIDs))
+	if len(auctionIDs) == 0 {
+		return out, nil
+	}
+	type countRow struct {
+		AuctionID uuid.UUID `gorm:"column:auction_id"`
+		Total     int64     `gorm:"column:total"`
+	}
+	var rows []countRow
+	if err := r.db.Table("auction_participations").
+		Select("auction_id, COUNT(*) AS total").
+		Where("auction_id IN ? AND status = 'active'", auctionIDs).
+		Group("auction_id").
+		Scan(&rows).Error; err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		out[row.AuctionID] = row.Total
+	}
+	return out, nil
+}
+
+func (r *AuctionParticipationRepository) CountByAuctionsSince(auctionIDs []uuid.UUID, since time.Time) (map[uuid.UUID]int64, error) {
+	out := make(map[uuid.UUID]int64, len(auctionIDs))
+	if len(auctionIDs) == 0 {
+		return out, nil
+	}
+	type countRow struct {
+		AuctionID uuid.UUID `gorm:"column:auction_id"`
+		Total     int64     `gorm:"column:total"`
+	}
+	var rows []countRow
+	if err := r.db.Table("auction_participations").
+		Select("auction_id, COUNT(*) AS total").
+		Where("auction_id IN ? AND status = 'active' AND created_at >= ?", auctionIDs, since).
+		Group("auction_id").
+		Scan(&rows).Error; err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		out[row.AuctionID] = row.Total
+	}
+	return out, nil
+}
+
+func (r *AuctionParticipationRepository) JoinedAuctionSet(auctionIDs []uuid.UUID, participantID string) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool)
+	if len(auctionIDs) == 0 || participantID == "" {
+		return out, nil
+	}
+	var ids []uuid.UUID
+	if err := r.db.Table("auction_participations").
+		Where("auction_id IN ? AND participant_id = ? AND status = 'active'", auctionIDs, participantID).
+		Pluck("auction_id", &ids).Error; err != nil {
+		return out, err
+	}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}

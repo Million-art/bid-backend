@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
+	"github.com/bid-hub/admin-backend/core/ports"
 	"github.com/google/uuid"
 )
 
@@ -35,36 +36,57 @@ func (s *Service) ListPublicAuctions(page, limit int) ([]domain.Auction, int64, 
 
 // ListPublicAuctionCards returns list payloads without bid values.
 func (s *Service) ListPublicAuctionCards(page, limit int, viewerID string) ([]domain.PublicAuctionCard, int64, error) {
-	auctions, total, err := s.ListPublicAuctions(page, limit)
+	cards, total, _, err := s.ListPublicAuctionCardsFiltered(ports.PublicAuctionFilter{
+		Limit:  limit,
+		Offset: (page - 1) * limit,
+	}, viewerID)
+	return cards, total, err
+}
+
+// ListPublicAuctionCardsFiltered returns server-filtered, sorted, and paginated auction cards with status counts.
+func (s *Service) ListPublicAuctionCardsFiltered(filter ports.PublicAuctionFilter, viewerID string) ([]domain.PublicAuctionCard, int64, map[string]int64, error) {
+	auctions, total, statusCounts, err := s.auctionRepo.ListPublicFiltered(filter)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
-	return s.toPublicAuctionCards(auctions, viewerID), total, nil
+	return s.toPublicAuctionCards(auctions, viewerID), total, statusCounts, nil
 }
 
 func (s *Service) toPublicAuctionCards(auctions []domain.Auction, viewerID string) []domain.PublicAuctionCard {
+	if len(auctions) == 0 {
+		return []domain.PublicAuctionCard{}
+	}
 	now := time.Now().UTC()
 	sinceHot := now.Add(-hotGrowthWindow)
-	growth := make(map[uuid.UUID]int64, len(auctions))
+
+	auctionIDs := make([]uuid.UUID, 0, len(auctions))
+	for i := range auctions {
+		auctionIDs = append(auctionIDs, auctions[i].ID)
+	}
+
+	countsMap, _ := s.participationRepo.CountByAuctions(auctionIDs)
+	growthMap, _ := s.participationRepo.CountByAuctionsSince(auctionIDs, sinceHot)
+	var joinedMap map[uuid.UUID]bool
+	if viewerID != "" {
+		joinedMap, _ = s.participationRepo.JoinedAuctionSet(auctionIDs, viewerID)
+	}
+
 	var maxGrowth int64
 	for i := range auctions {
 		a := &auctions[i]
-		count, _ := s.participationRepo.CountByAuction(a.ID)
-		a.ParticipantCount = count
-		g, _ := s.participationRepo.CountByAuctionSince(a.ID, sinceHot)
-		growth[a.ID] = g
+		a.ParticipantCount = countsMap[a.ID]
+		g := growthMap[a.ID]
 		if g > maxGrowth {
 			maxGrowth = g
 		}
 		if viewerID != "" {
-			p, err := s.participationRepo.GetByAuctionAndParticipant(a.ID, viewerID)
-			a.UserHasJoined = err == nil && p != nil && p.Status == domain.ParticipationStatusActive
+			a.UserHasJoined = joinedMap[a.ID]
 		}
 	}
 
 	cards := make([]domain.PublicAuctionCard, 0, len(auctions))
 	for i := range auctions {
-		cards = append(cards, toPublicAuctionCard(auctions[i], growth[auctions[i].ID], maxGrowth, now))
+		cards = append(cards, toPublicAuctionCard(auctions[i], growthMap[auctions[i].ID], maxGrowth, now))
 	}
 	return cards
 }
