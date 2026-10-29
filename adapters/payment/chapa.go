@@ -51,6 +51,24 @@ type initializeAPIResponse struct {
 	} `json:"data"`
 }
 
+func sanitizeChapaText(raw string, maxLen int) string {
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, r := range raw {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if maxLen > 0 && len(out) > maxLen {
+		out = strings.TrimSpace(out[:maxLen])
+	}
+	return out
+}
+
 func (c *ChapaClient) InitializeTransaction(req ports.ChapaInitializeRequest) (*ports.ChapaInitializeResponse, error) {
 	if c.secretKey == "" || c.secretKey == "your_chapa_secret_key" {
 		return nil, fmt.Errorf("chapa secret key is not configured")
@@ -59,19 +77,13 @@ func (c *ChapaClient) InitializeTransaction(req ports.ChapaInitializeRequest) (*
 	if currency == "" {
 		currency = "ETB"
 	}
-	title := strings.TrimSpace(req.Title)
+	title := sanitizeChapaText(req.Title, 16)
 	if title == "" {
 		title = "CarraMarket"
 	}
-	if len(title) > 16 {
-		title = title[:16]
-	}
-	desc := strings.TrimSpace(req.Description)
+	desc := sanitizeChapaText(req.Description, 50)
 	if desc == "" {
 		desc = "Auction entrance fee and bid"
-	}
-	if len(desc) > 50 {
-		desc = desc[:50]
 	}
 
 	payload := initializePayload{

@@ -280,7 +280,7 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		if len(bidValueStrings) == 1 {
 			q.Set("bid_value", bidValueStrings[0])
 		} else if len(bidValueStrings) > 1 {
-			q.Set("bid_values", strings.Join(bidValueStrings, ","))
+			q.Set("bid_values", strings.Join(bidValueStrings, "_"))
 		}
 		parsedReturn.RawQuery = q.Encode()
 		returnBase = parsedReturn.String()
@@ -289,19 +289,19 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 	meta := map[string]interface{}{
 		"auction_id":   auctionID.String(),
 		"user_id":      userUUID.String(),
-		"ticket_count": len(bidPack),
+		"ticket_count": strconv.Itoa(len(bidPack)),
 	}
 	if len(bidValueStrings) == 1 {
 		meta["bid_value"] = bidValueStrings[0]
 	}
 	if len(bidValueStrings) > 0 {
-		// Store as comma-separated string so Chapa's flat string meta map accepts it without 400 validation errors
-		meta["bid_values"] = strings.Join(bidValueStrings, ",")
+		// Store as pipe-separated string so Chapa's flat string meta map accepts it without 400 validation errors
+		meta["bid_values"] = strings.Join(bidValueStrings, "_")
 	}
 
 	desc := "Auction entrance fee and bid"
 	if len(bidPack) > 1 {
-		desc = fmt.Sprintf("Auction bid pack (%d tickets)", len(bidPack))
+		desc = fmt.Sprintf("Auction bid pack %d tickets", len(bidPack))
 	}
 
 	initResp, err := h.chapaClient.InitializeTransaction(ports.ChapaInitializeRequest{
@@ -366,7 +366,9 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 	}
 	if len(bidVals) == 0 {
 		if qVals := strings.TrimSpace(c.Query("bid_values")); qVals != "" {
-			for _, part := range strings.Split(qVals, ",") {
+			for _, part := range strings.FieldsFunc(qVals, func(r rune) bool {
+				return r == ',' || r == '_' || r == ';' || r == '|'
+			}) {
 				if parsed, pErr := strconv.ParseFloat(strings.TrimSpace(part), 64); pErr == nil && parsed > 0 {
 					bidVals = append(bidVals, domain.NewMoney(parsed))
 				}

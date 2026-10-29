@@ -133,7 +133,9 @@ func (s *Service) resolveBidValues(txRef string, snap *VerifiedSnapshot) []domai
 			}
 		}
 		if rawCSV, ok := snap.Meta["bid_values"].(string); ok && strings.TrimSpace(rawCSV) != "" {
-			parts := strings.Split(rawCSV, ",")
+			parts := strings.FieldsFunc(rawCSV, func(r rune) bool {
+				return r == ',' || r == '_' || r == ';' || r == '|'
+			})
 			out := make([]domain.Money, 0, len(parts))
 			for _, part := range parts {
 				if m, err := domain.NewMoneyFromString(strings.TrimSpace(part)); err == nil && m.IsPositive() {

@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveBidValues_CommaSeparatedStringInMeta(t *testing.T) {
+func TestResolveBidValues_CommaAndUnderscoreSeparatedStringInMeta(t *testing.T) {
 	svc := &Service{}
 	snap := &VerifiedSnapshot{
 		TxRef: "R-test123",
 		Meta: map[string]interface{}{
-			"bid_values": "1.25, 3.50, 10.00",
+			"bid_values": "1.25_3.50_10.00",
 		},
 	}
 
