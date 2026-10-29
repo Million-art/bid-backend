@@ -81,7 +81,7 @@ func (p *ChannelPoster) PostAuctionPublished(ctx context.Context, a *domain.Auct
 	}
 
 	deepLink := fmt.Sprintf(
-		"https://t.me/%s/%s?startapp=%s",
+		"https://t.me/%s/%s?startapp=auction_%s",
 		p.botUser,
 		miniAppShortName,
 		a.ID.String(),
