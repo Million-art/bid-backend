@@ -14,17 +14,24 @@ import (
 )
 
 type TelegramBroadcastHandler struct {
-	poster *telegramadapter.ChannelPoster
-	users  ports.UserRepository
+	poster       *telegramadapter.ChannelPoster
+	users        ports.UserRepository
+	participants ports.ParticipantUserRepository
 }
 
 func NewTelegramBroadcastHandler(
 	poster *telegramadapter.ChannelPoster,
 	users ports.UserRepository,
+	participants ...ports.ParticipantUserRepository,
 ) *TelegramBroadcastHandler {
+	var partRepo ports.ParticipantUserRepository
+	if len(participants) > 0 {
+		partRepo = participants[0]
+	}
 	return &TelegramBroadcastHandler{
-		poster: poster,
-		users:  users,
+		poster:       poster,
+		users:        users,
+		participants: partRepo,
 	}
 }
 
@@ -109,6 +116,21 @@ type shareContactRequest struct {
 	Username   string `json:"username"`
 }
 
+func (h *TelegramBroadcastHandler) syncParticipantUser(user *domain.User) {
+	if h.participants == nil || user == nil || strings.TrimSpace(user.Phone) == "" {
+		return
+	}
+	_ = h.participants.UpsertByPhone(&domain.ParticipantUser{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		FullName:  user.FullName,
+		Phone:     user.Phone,
+		Status:    "active",
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+	})
+}
+
 // ShareContact registers (or links) a Mini App contact onto users:
 // new phone → create user; existing web phone → attach telegram_id + username.
 func (h *TelegramBroadcastHandler) ShareContact(c fiber.Ctx) error {
@@ -136,6 +158,7 @@ func (h *TelegramBroadcastHandler) ShareContact(c fiber.Ctx) error {
 		}
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to save contact", err)
 	}
+	h.syncParticipantUser(user)
 
 	return response.Success(c, fiber.StatusOK, "Contact saved", fiber.Map{
 		"telegramId": req.TelegramID,
@@ -193,7 +216,8 @@ func (h *TelegramBroadcastHandler) Webhook(c fiber.Ctx) error {
 		}
 	}
 
-	_, _ = h.users.UpsertTelegramProfile(msg.From.ID, msg.From.Username, name, phone)
+	user, _ := h.users.UpsertTelegramProfile(msg.From.ID, msg.From.Username, name, phone)
+	h.syncParticipantUser(user)
 
 	chatID := msg.From.ID
 	if msg.Chat != nil && msg.Chat.ID != 0 {

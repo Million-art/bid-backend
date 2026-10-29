@@ -22,19 +22,19 @@ const (
 	telegramAPIBase   = "https://api.telegram.org"
 	maxCaptionRunes   = 1024
 	maxDescRunes      = 280
-	miniAppShortName  = "startapp"
 	httpClientTimeout = 15 * time.Second
 )
 
 // ChannelPoster posts newly published auctions to a Telegram channel.
 type ChannelPoster struct {
-	token    string
-	channel  string
-	botUser  string
-	adminID  string
-	client   *http.Client
-	log      *slog.Logger
-	enabled  bool
+	token            string
+	channel          string
+	botUser          string
+	miniAppShortName string
+	adminID          string
+	client           *http.Client
+	log              *slog.Logger
+	enabled          bool
 }
 
 func NewChannelPoster(cfg *env.Config, log *slog.Logger) *ChannelPoster {
@@ -44,6 +44,7 @@ func NewChannelPoster(cfg *env.Config, log *slog.Logger) *ChannelPoster {
 	token := ""
 	channel := ""
 	botUser := ""
+	shortName := ""
 	adminID := ""
 	if cfg != nil {
 		token = strings.TrimSpace(cfg.TelegramBotToken)
@@ -54,17 +55,19 @@ func NewChannelPoster(cfg *env.Config, log *slog.Logger) *ChannelPoster {
 			}
 		}
 		botUser = strings.TrimPrefix(strings.TrimSpace(cfg.TelegramBotUsername), "@")
+		shortName = strings.Trim(strings.TrimSpace(cfg.TelegramMiniAppShortName), "/")
 		adminID = strings.TrimSpace(cfg.TelegramAdminID)
 	}
 	enabled := token != "" && channel != "" && botUser != ""
 	return &ChannelPoster{
-		token:   token,
-		channel: channel,
-		botUser: botUser,
-		adminID: adminID,
-		client:  &http.Client{Timeout: httpClientTimeout},
-		log:     log,
-		enabled: enabled,
+		token:            token,
+		channel:          channel,
+		botUser:          botUser,
+		miniAppShortName: shortName,
+		adminID:          adminID,
+		client:           &http.Client{Timeout: httpClientTimeout},
+		log:              log,
+		enabled:          enabled,
 	}
 }
 
@@ -80,12 +83,7 @@ func (p *ChannelPoster) PostAuctionPublished(ctx context.Context, a *domain.Auct
 		return nil
 	}
 
-	deepLink := fmt.Sprintf(
-		"https://t.me/%s/%s?startapp=auction_%s",
-		p.botUser,
-		miniAppShortName,
-		a.ID.String(),
-	)
+	deepLink := p.auctionDeepLink(a.ID.String())
 	caption := buildCaption(a)
 	keyboard := map[string]any{
 		"inline_keyboard": [][]map[string]string{
@@ -135,12 +133,28 @@ func (p *ChannelPoster) PostAuctionPublished(ctx context.Context, a *domain.Auct
 	return nil
 }
 
+func (p *ChannelPoster) auctionDeepLink(auctionID string) string {
+	botUser := strings.TrimPrefix(strings.TrimSpace(p.botUser), "@")
+	if botUser == "" {
+		return ""
+	}
+	if p.miniAppShortName != "" {
+		return fmt.Sprintf("https://t.me/%s/%s?startapp=auction_%s", botUser, p.miniAppShortName, auctionID)
+	}
+	// Main Mini App Direct Link: works for any bot with a Main Mini App configured in BotFather
+	// without needing a separate /newapp short name.
+	return fmt.Sprintf("https://t.me/%s?startapp=auction_%s", botUser, auctionID)
+}
+
 func (p *ChannelPoster) miniAppDeepLink() string {
 	botUser := strings.TrimPrefix(strings.TrimSpace(p.botUser), "@")
 	if botUser == "" {
 		return ""
 	}
-	return fmt.Sprintf("https://t.me/%s/%s", botUser, miniAppShortName)
+	if p.miniAppShortName != "" {
+		return fmt.Sprintf("https://t.me/%s/%s", botUser, p.miniAppShortName)
+	}
+	return fmt.Sprintf("https://t.me/%s?startapp", botUser)
 }
 
 func (p *ChannelPoster) sendPrivateWithMiniAppButton(ctx context.Context, chatID int64, text, buttonLabel string) error {

@@ -51,3 +51,31 @@ func TestBuildCaptionIncludesFeeAndLinkCopy(t *testing.T) {
 		t.Fatalf("expected CTA copy in caption: %s", cap)
 	}
 }
+
+func TestMiniAppDeepLinks_MainAndShortName(t *testing.T) {
+	mainPoster := NewChannelPoster(&env.Config{
+		TelegramBotToken:    "123:ABC",
+		TelegramChannelID:   "-1001",
+		TelegramBotUsername: "carramarket_bot",
+	}, nil)
+	if got := mainPoster.miniAppDeepLink(); got != "https://t.me/carramarket_bot?startapp" {
+		t.Fatalf("unexpected main mini app link: %s", got)
+	}
+	if got := mainPoster.auctionDeepLink("abc-123"); got != "https://t.me/carramarket_bot?startapp=auction_abc-123" {
+		t.Fatalf("unexpected main auction deep link: %s", got)
+	}
+
+	shortNamePoster := NewChannelPoster(&env.Config{
+		TelegramBotToken:         "123:ABC",
+		TelegramChannelID:        "-1001",
+		TelegramBotUsername:      "carramarket_bot",
+		TelegramMiniAppShortName: "app",
+	}, nil)
+	if got := shortNamePoster.miniAppDeepLink(); got != "https://t.me/carramarket_bot/app" {
+		t.Fatalf("unexpected short name mini app link: %s", got)
+	}
+	if got := shortNamePoster.auctionDeepLink("abc-123"); got != "https://t.me/carramarket_bot/app?startapp=auction_abc-123" {
+		t.Fatalf("unexpected short name auction deep link: %s", got)
+	}
+}
+

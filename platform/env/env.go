@@ -44,6 +44,7 @@ type Config struct {
 	GoogleClientID                   string
 	TelegramBotToken                 string // BOT_TOKEN or TELEGRAM_BOT_TOKEN
 	TelegramBotUsername              string // BOT_USERNAME or TELEGRAM_BOT_USERNAME
+	TelegramMiniAppShortName         string // TELEGRAM_MINI_APP_SHORT_NAME (optional BotFather /newapp short name)
 	TelegramChannelID                string // CHANNEL_ID  channel/supergroup for auction posts
 	TelegramAdminID                  string // ADMIN_ID  optional admin chat for failure DMs
 
@@ -156,6 +157,7 @@ func LoadConfig() *Config {
 		GoogleClientID:                   getEnv("GOOGLE_CLIENT_ID", "510278494876-bkmbkv9hfuelp0a5pv8lcqpd32ondgst.apps.googleusercontent.com"),
 		TelegramBotToken:                 getEnvFallback("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", ""),
 		TelegramBotUsername:              strings.TrimPrefix(getEnvFallback("TELEGRAM_BOT_USERNAME", "BOT_USERNAME", ""), "@"),
+		TelegramMiniAppShortName:         strings.Trim(getEnvFallback("TELEGRAM_MINI_APP_SHORT_NAME", "MINI_APP_SHORT_NAME", ""), "/ "),
 		TelegramChannelID:                getEnvFallback("CHANNEL_ID", "TELEGRAM_CHANNEL_ID", ""),
 		TelegramAdminID:                  getEnvFallback("ADMIN_ID", "TELEGRAM_ADMIN_ID", ""),
 		ChapaPublicKey:                   getEnv("CHAPA_PUBLIC_KEY", ""),

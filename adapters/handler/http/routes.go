@@ -106,7 +106,7 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	notificationHandler := NewNotificationHandler(notificationService)
 	legalDocHandler := NewLegalDocumentHandler(legalDocService)
 	paymentHandler := NewPaymentHandler(paymentLedgerSvc)
-	telegramBroadcastHandler := NewTelegramBroadcastHandler(telegramPoster, userRepo)
+	telegramBroadcastHandler := NewTelegramBroadcastHandler(telegramPoster, userRepo, participantUserRepo)
 
 	r2PresignService, err := r2storage.NewPresignService(cfg)
 	if err != nil {
