@@ -18,6 +18,8 @@ type Service struct {
 	chapa   ports.PaymentProvider
 	lubSvc  *lub.Service
 	audit   *services.AuditLogService
+	metrics ports.MetricsProvider
+	admin   ports.AdminNotifier
 }
 
 func NewService(
@@ -34,6 +36,21 @@ func NewService(
 		lubSvc:  lubSvc,
 		audit:   audit,
 	}
+}
+
+func (s *Service) SetMetrics(m ports.MetricsProvider) {
+	s.metrics = m
+}
+
+func (s *Service) SetAdminNotifier(n ports.AdminNotifier) {
+	s.admin = n
+}
+
+func (s *Service) alertAdmin(ctx context.Context, text string) {
+	if s.admin == nil {
+		return
+	}
+	s.admin.NotifyAdmin(ctx, text)
 }
 
 func (s *Service) List(ctx context.Context, f ports.PaymentListFilter) ([]domain.PaymentStaffView, int64, error) {
@@ -112,6 +129,7 @@ func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Pay
 	chapaRef, err := s.chapa.InitiateRefund(refPath, p.Amount.Float64(), reason, record.ID.String())
 	if err != nil {
 		_ = s.refunds.UpdateStatus(record.ID, domain.RefundStatusFailed, "", err.Error())
+		s.alertAdmin(ctx, fmt.Sprintf("❌ Refund failed\ntx_ref: %s\namount: %s ETB\nerror: %s", p.TxRef, p.Amount.String(), err.Error()))
 		return fmt.Errorf("chapa refund call failed: %w", err)
 	}
 
@@ -131,6 +149,7 @@ func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Pay
 	}
 
 	if recordStatus == domain.RefundStatusReversed {
+		s.alertAdmin(ctx, fmt.Sprintf("⚠️ Refund reversed by Chapa\ntx_ref: %s\namount: %s ETB", p.TxRef, p.Amount.String()))
 		return domain.NewAppError(422, "Chapa reversed the refund (funds returned to your Chapa balance)", nil)
 	}
 
@@ -140,6 +159,9 @@ func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Pay
 		}
 		if err := s.lubSvc.RefundParticipation(ctx, part.ID); err != nil {
 			return fmt.Errorf("failed to mark participation refunded: %w", err)
+		}
+		if s.metrics != nil {
+			s.metrics.RecordRefundProcessed(p.Amount.Float64())
 		}
 	}
 
@@ -166,6 +188,10 @@ func (s *Service) initiateParticipationRefund(ctx context.Context, p *domain.Pay
 			},
 		}, nil)
 	}
+	s.alertAdmin(ctx, fmt.Sprintf(
+		"↩️ Refund %s\ntx_ref: %s\namount: %s ETB\nchapa_ref: %s\nstatus: %s",
+		recordStatus, p.TxRef, p.Amount.String(), chapaRef, recordStatus,
+	))
 	return nil
 }
 
@@ -190,6 +216,7 @@ func (s *Service) refundPaymentOnly(ctx context.Context, p *domain.Payment, acto
 	chapaRef, err := s.chapa.InitiateRefund(refPath, p.Amount.Float64(), reason, record.ID.String())
 	if err != nil {
 		_ = s.refunds.UpdateStatus(record.ID, domain.RefundStatusFailed, "", err.Error())
+		s.alertAdmin(ctx, fmt.Sprintf("❌ Refund failed\ntx_ref: %s\namount: %s ETB\nerror: %s", p.TxRef, p.Amount.String(), err.Error()))
 		return fmt.Errorf("chapa refund call failed: %w", err)
 	}
 
@@ -209,12 +236,16 @@ func (s *Service) refundPaymentOnly(ctx context.Context, p *domain.Payment, acto
 	}
 
 	if recordStatus == domain.RefundStatusReversed {
+		s.alertAdmin(ctx, fmt.Sprintf("⚠️ Refund reversed by Chapa\ntx_ref: %s\namount: %s ETB", p.TxRef, p.Amount.String()))
 		return domain.NewAppError(422, "Chapa reversed the refund (funds returned to your Chapa balance)", nil)
 	}
 
 	if markPayment {
 		if err := s.ledger.MarkRefunded(ctx, p.TxRef); err != nil {
 			return err
+		}
+		if s.metrics != nil {
+			s.metrics.RecordRefundProcessed(p.Amount.Float64())
 		}
 	}
 
@@ -240,6 +271,10 @@ func (s *Service) refundPaymentOnly(ctx context.Context, p *domain.Payment, acto
 			},
 		}, nil)
 	}
+	s.alertAdmin(ctx, fmt.Sprintf(
+		"↩️ Refund %s\ntx_ref: %s\namount: %s ETB\nchapa_ref: %s\nstatus: %s",
+		recordStatus, p.TxRef, p.Amount.String(), chapaRef, recordStatus,
+	))
 	return nil
 }
 

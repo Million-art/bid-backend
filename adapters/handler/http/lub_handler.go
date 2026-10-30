@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -176,6 +177,53 @@ func formatChapaPhone(raw string) string {
 	return ""
 }
 
+// chapaPublicCallbackURL reports whether Chapa will accept this as callback_url.
+// Chapa rejects loopback hosts with 400 "callback url must be a valid URL".
+func chapaPublicCallbackURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	switch host {
+	case "localhost", "127.0.0.1", "0.0.0.0", "::1":
+		return false
+	}
+	if strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	return true
+}
+
+// resolveChapaCallbackURL prefers CALLBACK_URL (production), then a public request host.
+// Loopback is never sent to Chapa — that only affects local dev; production must set
+// CALLBACK_URL=https://<public-api>/api/webhooks/chapa so webhooks always fire.
+func resolveChapaCallbackURL(cfgCallback string, reqScheme, reqHost string) string {
+	if u := strings.TrimSpace(cfgCallback); chapaPublicCallbackURL(u) {
+		return u
+	}
+	scheme := strings.TrimSpace(reqScheme)
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := strings.TrimSpace(reqHost)
+	if host == "" {
+		return ""
+	}
+	derived := fmt.Sprintf("%s://%s/api/webhooks/chapa", scheme, host)
+	if chapaPublicCallbackURL(derived) {
+		return derived
+	}
+	return ""
+}
+
 func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 	var req RecordParticipationRequest
 	_ = c.Bind().JSON(&req)
@@ -232,10 +280,9 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		chargeAmount = chargeAmount.Add(a.EntranceFee).Add(bidMoney)
 	}
 
-	if err := h.chapaPaymentSvc.CreatePendingPayment(c.Context(), txRef, userUUID, auctionID, chargeAmount); err != nil {
+	if err := h.chapaPaymentSvc.CreatePendingPayment(c.Context(), txRef, userUUID, auctionID, chargeAmount, bidPack...); err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to create pending payment", err)
 	}
-	h.chapaPaymentSvc.SetPendingBids(txRef, bidPack)
 
 	email := "bidder@carramarket.com"
 	firstName := "CarraMarket"
@@ -258,19 +305,15 @@ func (h *AuctionHandler) RecordParticipation(c fiber.Ctx) error {
 		}
 	}
 
-	callbackURL := ""
-	if h.cfg != nil && (strings.HasPrefix(h.cfg.CallbackURL, "http://") || strings.HasPrefix(h.cfg.CallbackURL, "https://")) {
-		callbackURL = strings.TrimSpace(h.cfg.CallbackURL)
-	} else {
-		scheme := c.Protocol()
-		if proto := strings.TrimSpace(c.Get("X-Forwarded-Proto")); proto != "" {
-			scheme = strings.Split(proto, ",")[0]
-		}
-		host := c.Host()
-		if host != "" {
-			callbackURL = fmt.Sprintf("%s://%s/api/webhooks/chapa", scheme, host)
-		}
+	cfgCallback := ""
+	if h.cfg != nil {
+		cfgCallback = h.cfg.CallbackURL
 	}
+	scheme := c.Protocol()
+	if proto := strings.TrimSpace(c.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = strings.TrimSpace(strings.Split(proto, ",")[0])
+	}
+	callbackURL := resolveChapaCallbackURL(cfgCallback, scheme, c.Host())
 
 	returnBase := strings.TrimSpace(req.ReturnURL)
 	if returnBase == "" {
@@ -406,12 +449,22 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusServiceUnavailable, "Chapa payment gateway is not configured", nil)
 	}
 
+	// Fast path: webhook/reconciler already recorded success — do not block the UI on Chapa.
+	if existing, eErr := h.chapaPaymentSvc.GetPaymentByTxRef(c.Context(), txRef); eErr == nil && existing != nil &&
+		existing.Status == domain.PaymentStatusSuccess {
+		if !existing.Processed {
+			_, _ = h.chapaPaymentSvc.RetryPaymentByTxRef(c.Context(), txRef)
+		}
+		h.chapaPaymentSvc.EnsureBidsForPayment(c.Context(), txRef, bidVals)
+		return h.paymentVerifyResponse(c, txRef, true, domain.PaymentStatusSuccess)
+	}
+
 	snap, err := h.chapaClient.VerifyTransaction(txRef)
 	if err != nil {
 		return response.Error(c, fiber.StatusBadGateway, "Failed to verify Chapa transaction: "+err.Error(), err)
 	}
 
-	metaMap, _ := snap.Meta.(map[string]interface{})
+	metaMap := chapapayment.NormalizeChapaMeta(snap.Meta)
 	verifiedSnap := &chapapayment.VerifiedSnapshot{
 		TxRef:          txRef,
 		ChapaReference: snap.Reference,
@@ -428,15 +481,27 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 	}
 
 	if err := h.chapaPaymentSvc.ProcessVerified(c.Context(), verifiedSnap); err != nil {
+		if errors.Is(err, chapapayment.ErrFulfillmentDeferred) {
+			// Payment captured; background retry will finish participation/bids.
+			return response.Success(c, fiber.StatusAccepted, "Payment verified; fulfillment pending retry", fiber.Map{
+				"verified": true,
+				"status":   snap.Status,
+				"txRef":    txRef,
+				"pending":  true,
+			})
+		}
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to process verified payment", err)
 	}
 
+	return h.paymentVerifyResponse(c, txRef, strings.EqualFold(snap.Status, "success"), snap.Status)
+}
+
+func (h *AuctionHandler) paymentVerifyResponse(c fiber.Ctx, txRef string, verified bool, status string) error {
 	out := fiber.Map{
-		"verified": strings.EqualFold(snap.Status, "success"),
-		"status":   snap.Status,
+		"verified": verified,
+		"status":   status,
 		"txRef":    txRef,
 	}
-
 	if p, pErr := h.chapaPaymentSvc.GetPaymentByTxRef(c.Context(), txRef); pErr == nil && p != nil && p.AuctionID != nil && p.UserID != nil {
 		part, _ := h.svc.GetParticipation(*p.AuctionID, p.UserID.String())
 		bids, _ := h.svc.ListMyBids(*p.AuctionID, p.UserID.String())
@@ -445,7 +510,6 @@ func (h *AuctionHandler) VerifyChapaPayment(c fiber.Ctx) error {
 		out["participation"] = part
 		out["bids"] = bids
 	}
-
 	return response.Success(c, fiber.StatusOK, "Payment verification complete", out)
 }
 
@@ -478,7 +542,7 @@ func (h *AuctionHandler) ChapaWebhook(c fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"status": "verify_failed"})
 	}
-	metaMap, _ := snap.Meta.(map[string]interface{})
+	metaMap := chapapayment.NormalizeChapaMeta(snap.Meta)
 	verifiedSnap := &chapapayment.VerifiedSnapshot{
 		TxRef:          txRef,
 		ChapaReference: snap.Reference,
@@ -490,6 +554,7 @@ func (h *AuctionHandler) ChapaWebhook(c fiber.Ctx) error {
 		CustomerFirst:  snap.CustomerFirst,
 	}
 	if err := h.chapaPaymentSvc.ProcessVerified(c.Context(), verifiedSnap); err != nil {
+		// Ask Chapa to retry when fulfillment is deferred; identity/bids are durable now.
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "retry"})
 	}
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "ok"})

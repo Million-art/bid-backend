@@ -18,6 +18,9 @@ type Payment struct {
 	AuctionID       *uuid.UUID `gorm:"type:uuid;index:idx_payments_auction"                                                    json:"auctionId,omitempty"`
 	ParticipationID *uuid.UUID `gorm:"type:uuid;index:idx_payments_participation"                                              json:"participationId,omitempty"`
 	Amount          Money      `gorm:"type:decimal(12,2);not null"                                                             json:"amount"`
+	// BidValues persists the bid pack (underscore-separated) so Chapa webhooks / other
+	// replicas can place bids without relying on in-memory pendingBids.
+	BidValues       string     `gorm:"type:text;column:bid_values"                                                             json:"bidValues,omitempty"`
 	Status          string     `gorm:"type:payment_status;not null;default:'pending';index:idx_payments_unprocessed,priority:1" json:"status"`
 	Processed       bool       `gorm:"not null;default:false;index:idx_payments_unprocessed,priority:2"                        json:"processed"`
 	RetryDisabled   bool       `gorm:"not null;default:false;index:idx_payments_unprocessed,priority:3"                        json:"retryDisabled"`

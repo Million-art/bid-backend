@@ -43,4 +43,5 @@ type ParticipantUserRepository interface {
 	UpdateStatus(id string, status string) error
 	Delete(id string) error
 	Count(filter map[string]interface{}) (int64, error)
+	GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error)
 }

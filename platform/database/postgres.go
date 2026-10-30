@@ -22,6 +22,7 @@ func EnsureSafeSchema(db *gorm.DB) {
 		`ALTER TABLE auctions ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`ALTER TABLE auctions ADD COLUMN IF NOT EXISTS retail_value DECIMAL(12,2) NOT NULL DEFAULT 0`,
 		`ALTER TABLE auctions ADD COLUMN IF NOT EXISTS min_participants INTEGER NOT NULL DEFAULT 10`,
+		`ALTER TABLE payments ADD COLUMN IF NOT EXISTS bid_values TEXT NOT NULL DEFAULT ''`,
 		`UPDATE auctions
 		 SET image_urls = jsonb_build_array(image_url)
 		 WHERE (image_urls IS NULL OR image_urls = '[]'::jsonb)

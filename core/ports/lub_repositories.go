@@ -43,6 +43,7 @@ type AuctionParticipationRepository interface {
 	CountByAuctions(auctionIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	CountByAuctionsSince(auctionIDs []uuid.UUID, since time.Time) (map[uuid.UUID]int64, error)
 	JoinedAuctionSet(auctionIDs []uuid.UUID, participantID string) (map[uuid.UUID]bool, error)
+	GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error)
 }
 
 // BidRepository manages the secret bid values participants place.
@@ -56,4 +57,5 @@ type BidRepository interface {
 	FindWinner(auctionID uuid.UUID) (*domain.Bid, error)
 	MarkWinner(auctionID uuid.UUID, winnerBidID uuid.UUID) error
 	DeleteBid(id uuid.UUID) error
+	GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error)
 }

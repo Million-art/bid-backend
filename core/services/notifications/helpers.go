@@ -8,9 +8,39 @@ import (
 )
 
 func participationNotificationCopy(productName string, feePaid domain.Money) (title string, message string, priority string) {
-	return "Participation confirmed",
-		fmt.Sprintf("Your entrance fee of %s for auction '%s' has been confirmed. You can now place bids.", feePaid.String(), productName),
-		domain.NotificationPriorityNormal
+	return "Ticket purchase confirmed",
+		fmt.Sprintf("Your payment of %s ETB for '%s' was successful. Your ticket is confirmed — you can place bids now.", feePaid.String(), productName),
+		domain.NotificationPriorityHigh
+}
+
+func participationSMSCopy(productName string, feePaid domain.Money, txRef string) string {
+	msg := fmt.Sprintf("CarraMarket: %s ETB paid for '%s'. Ticket confirmed — open the app to bid.", feePaid.String(), productName)
+	if txRef != "" {
+		msg = fmt.Sprintf("%s Ref:%s", msg, txRef)
+	}
+	if len(msg) > 300 {
+		msg = msg[:297] + "..."
+	}
+	return msg
+}
+
+func participationTelegramCopy(productName string, feePaid domain.Money, txRef string) string {
+	msg := fmt.Sprintf("✅ Ticket confirmed\n\nPaid %s ETB for '%s'.\nYou can place bids now.", feePaid.String(), productName)
+	if txRef != "" {
+		msg = fmt.Sprintf("%s\nRef: %s", msg, txRef)
+	}
+	return msg
+}
+
+func paymentFailedSMSCopy(txRef, reason string) string {
+	msg := fmt.Sprintf("CarraMarket: Payment failed (ref:%s).", txRef)
+	if reason != "" {
+		msg = fmt.Sprintf("%s %s", msg, reason)
+	}
+	if len(msg) > 300 {
+		msg = msg[:297] + "..."
+	}
+	return msg
 }
 
 func bidPlacedCopy(productName string, bidValue domain.Money) (title, message, priority string) {

@@ -21,7 +21,7 @@ func NewPaymentLedgerRepository(db *gorm.DB) *PaymentLedgerRepo {
 }
 
 const safePaymentSelect = `id, tx_ref, chapa_reference, user_id, auction_id, participation_id,
-	amount, status, processed, retry_disabled, last_error, created_at, updated_at`
+	amount, bid_values, status, processed, retry_disabled, last_error, created_at, updated_at`
 
 const paymentStaffEnrichSelect = safePaymentSelect + `,
 	participant_users.full_name AS participant_name,
@@ -60,12 +60,33 @@ func (r *PaymentLedgerRepo) Upsert(ctx context.Context, p *domain.Payment) error
 	p.ID = existing.ID
 	p.CreatedAt = existing.CreatedAt
 
+	// Never wipe identity / bid pack / amount written at checkout time.
+	if p.UserID == nil {
+		p.UserID = existing.UserID
+	}
+	if p.AuctionID == nil {
+		p.AuctionID = existing.AuctionID
+	}
+	if p.ParticipationID == nil {
+		p.ParticipationID = existing.ParticipationID
+	}
+	if p.Amount.IsZero() && !existing.Amount.IsZero() {
+		p.Amount = existing.Amount
+	}
+	if strings.TrimSpace(p.BidValues) == "" {
+		p.BidValues = existing.BidValues
+	}
+	if strings.TrimSpace(p.ChapaReference) == "" {
+		p.ChapaReference = existing.ChapaReference
+	}
+
 	updates := map[string]interface{}{
 		"chapa_reference":  p.ChapaReference,
 		"user_id":          p.UserID,
 		"auction_id":       p.AuctionID,
 		"participation_id": p.ParticipationID,
 		"amount":           p.Amount,
+		"bid_values":       p.BidValues,
 		"status":           p.Status,
 		"processed":        p.Processed,
 		"retry_disabled":   p.RetryDisabled,
@@ -202,6 +223,23 @@ func (r *PaymentLedgerRepo) ListSuccessUnprocessed(ctx context.Context, limit in
 	return rows, err
 }
 
+func (r *PaymentLedgerRepo) ListPendingOlderThan(ctx context.Context, olderThan time.Time, limit int) ([]domain.Payment, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	var rows []domain.Payment
+	err := r.db.WithContext(ctx).
+		Select(safePaymentSelect).
+		Where("status = ? AND created_at <= ?", domain.PaymentStatusPending, olderThan).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
+}
+
 func (r *PaymentLedgerRepo) MarkProcessed(ctx context.Context, txRef string) error {
 	return r.db.WithContext(ctx).Model(&domain.Payment{}).
 		Where("tx_ref = ?", txRef).
@@ -261,4 +299,61 @@ func (r *PaymentLedgerRepo) setLastError(ctx context.Context, txRef string, msg 
 	return r.db.WithContext(ctx).Model(&domain.Payment{}).
 		Where("tx_ref = ?", txRef).
 		Updates(updates).Error
+}
+
+func (r *PaymentLedgerRepo) SumAmountByStatus(ctx context.Context, status string) (domain.Money, error) {
+	var sum domain.Money
+	err := r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Select("COALESCE(SUM(amount), 0)").
+		Where("status = ?", status).
+		Scan(&sum).Error
+	return sum, err
+}
+
+func (r *PaymentLedgerRepo) CountByStatus(ctx context.Context, status string) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Where("status = ?", status).
+		Count(&n).Error
+	return n, err
+}
+
+func (r *PaymentLedgerRepo) CountSuccessUnprocessed(ctx context.Context) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Where("status = ? AND processed = ? AND retry_disabled = ?",
+			domain.PaymentStatusSuccess, false, false).
+		Count(&n).Error
+	return n, err
+}
+
+func (r *PaymentLedgerRepo) GetRevenueByMonth(ctx context.Context, lastMonths int) ([]domain.MonthlyAmount, error) {
+	if lastMonths <= 0 {
+		lastMonths = 12
+	}
+	cutoff := time.Now().AddDate(0, -lastMonths, 0)
+	var result []domain.MonthlyAmount
+	err := r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Select("to_char(created_at, 'YYYY-MM') as month, COALESCE(SUM(amount), 0) as amount").
+		Where("status = ? AND created_at >= ?", domain.PaymentStatusSuccess, cutoff).
+		Group("to_char(created_at, 'YYYY-MM')").
+		Order("month").
+		Scan(&result).Error
+	return result, err
+}
+
+func (r *PaymentLedgerRepo) GetCountByMonth(ctx context.Context, status string, lastMonths int) ([]domain.MonthlyCount, error) {
+	if lastMonths <= 0 {
+		lastMonths = 12
+	}
+	cutoff := time.Now().AddDate(0, -lastMonths, 0)
+	q := r.db.WithContext(ctx).Model(&domain.Payment{}).
+		Select("to_char(created_at, 'YYYY-MM') as month, count(*) as count").
+		Where("created_at >= ?", cutoff)
+	if strings.TrimSpace(status) != "" {
+		q = q.Where("status = ?", status)
+	}
+	var result []domain.MonthlyCount
+	err := q.Group("to_char(created_at, 'YYYY-MM')").Order("month").Scan(&result).Error
+	return result, err
 }

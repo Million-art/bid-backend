@@ -87,15 +87,24 @@ func RegisterRoutes(app *fiber.App, db *gorm.DB, redisClient *goredis.Client, cf
 	bidRepo := postgres.NewBidRepository(db)
 	notificationService := notifications.NewService(notificationRepo, userRepo, participantUserRepo, participationRepo, cacheRepo, emailService, smsService)
 	telegramPoster := telegramadapter.NewChannelPoster(cfg, slog.Default())
+	notificationService.SetTelegramMessenger(telegramPoster)
 	auctionService := lub.NewService(auctionRepo, participationRepo, bidRepo, auditService, notificationService, telegramPoster)
 	chapaPaymentSvc := chapapayment.NewService(paymentLedgerRepo, auctionService, participantUserRepo, notificationService, slog.Default())
+	chapaPaymentSvc.SetChapaClient(chapaClient)
+	chapaPaymentSvc.SetMetrics(metricsProvider)
+	chapaPaymentSvc.SetAdminNotifier(telegramPoster)
 	auctionAdminHandler := NewAuctionAdminHandler(auctionService)
 	auctionHandler := NewAuctionHandler(auctionService, chapaPaymentSvc, chapaClient, userRepo, cfg)
 
 	authService := services.NewAuthService(userRepo, participantUserRepo, auditService, emailService, cacheRepo, smsService, cfg)
 	userService := services.NewUserService(userRepo, auditService, emailService, authService, cfg)
 	paymentLedgerSvc := paymentledger.NewService(paymentLedgerRepo, refundRepo, chapaClient, auctionService, auditService)
-	dashboardService := services.NewDashboardService(userRepo, auctionRepo, participantUserRepo, auditRepo)
+	paymentLedgerSvc.SetMetrics(metricsProvider)
+	paymentLedgerSvc.SetAdminNotifier(telegramPoster)
+	dashboardService := services.NewDashboardService(
+		userRepo, auctionRepo, participantUserRepo, auditRepo,
+		paymentLedgerRepo, participationRepo, bidRepo,
+	)
 	legalDocService := services.NewLegalDocumentService(legalDocRepo, notificationService)
 
 	// Handlers

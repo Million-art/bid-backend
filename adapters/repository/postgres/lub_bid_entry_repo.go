@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/google/uuid"
@@ -126,4 +127,19 @@ func (r *BidRepository) MarkWinner(auctionID uuid.UUID, winnerBidID uuid.UUID) e
 
 func (r *BidRepository) DeleteBid(id uuid.UUID) error {
 	return r.db.Delete(&domain.Bid{}, "id = ?", id).Error
+}
+
+func (r *BidRepository) GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error) {
+	if lastMonths <= 0 {
+		lastMonths = 12
+	}
+	cutoff := time.Now().AddDate(0, -lastMonths, 0)
+	var result []domain.MonthlyCount
+	err := r.db.Model(&domain.Bid{}).
+		Select("to_char(created_at, 'YYYY-MM') as month, count(*) as count").
+		Where("created_at >= ?", cutoff).
+		Group("to_char(created_at, 'YYYY-MM')").
+		Order("month").
+		Scan(&result).Error
+	return result, err
 }

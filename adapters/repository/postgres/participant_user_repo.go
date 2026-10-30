@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"gorm.io/gorm"
@@ -115,4 +116,19 @@ func (r *ParticipantUserRepo) UpdateStatus(id string, status string) error {
 
 func (r *ParticipantUserRepo) Delete(id string) error {
 	return r.db.Delete(&domain.ParticipantUser{}, "id = ?", id).Error
+}
+
+func (r *ParticipantUserRepo) GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error) {
+	if lastMonths <= 0 {
+		lastMonths = 12
+	}
+	cutoff := time.Now().AddDate(0, -lastMonths, 0)
+	var result []domain.MonthlyCount
+	err := r.db.Model(&domain.ParticipantUser{}).
+		Select("to_char(created_at, 'YYYY-MM') as month, count(*) as count").
+		Where("created_at >= ?", cutoff).
+		Group("to_char(created_at, 'YYYY-MM')").
+		Order("month").
+		Scan(&result).Error
+	return result, err
 }

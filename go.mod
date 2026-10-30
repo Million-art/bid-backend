@@ -22,6 +22,7 @@ require (
 	github.com/swaggo/fiber-swagger v1.3.0
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/swag v1.16.6
+	github.com/telegram-mini-apps/init-data-golang v1.5.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/valyala/fasthttp v1.69.0
 	golang.org/x/crypto v0.49.0
@@ -115,7 +116,6 @@ require (
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/telegram-mini-apps/init-data-golang v1.5.0 // indirect
 	github.com/testcontainers/testcontainers-go v0.42.0 // indirect
 	github.com/tinylib/msgp v1.6.3 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect

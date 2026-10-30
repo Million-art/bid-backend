@@ -27,7 +27,7 @@ type NotificationService interface {
 	NotifyAuctionPostponed(ctx context.Context, productID uuid.UUID, productName string, newCloseAt string) error
 	NotifyAuctionClosed(ctx context.Context, productID uuid.UUID, productName string) error
 	NotifyAuctionCancelled(ctx context.Context, productID uuid.UUID, productName string, reason string) error
-	NotifyParticipationConfirmed(ctx context.Context, participantID string, productID uuid.UUID, productName string, feePaid domain.Money) error
+	NotifyParticipationConfirmed(ctx context.Context, participantID string, productID uuid.UUID, productName string, feePaid domain.Money, txRef string) error
 	NotifyBidPlaced(ctx context.Context, participantID string, productID uuid.UUID, productName string, bidValue domain.Money) error
 	NotifyBidUpdated(ctx context.Context, participantID string, productID uuid.UUID, productName string, oldValue, newValue domain.Money) error
 	NotifyAuctionWinner(ctx context.Context, winnerID string, productID uuid.UUID, productName string, winningBid domain.Money) error

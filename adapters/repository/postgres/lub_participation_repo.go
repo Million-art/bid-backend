@@ -150,3 +150,18 @@ func (r *AuctionParticipationRepository) JoinedAuctionSet(auctionIDs []uuid.UUID
 	}
 	return out, nil
 }
+
+func (r *AuctionParticipationRepository) GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error) {
+	if lastMonths <= 0 {
+		lastMonths = 12
+	}
+	cutoff := time.Now().AddDate(0, -lastMonths, 0)
+	var result []domain.MonthlyCount
+	err := r.db.Model(&domain.AuctionParticipation{}).
+		Select("to_char(created_at, 'YYYY-MM') as month, count(*) as count").
+		Where("status = ? AND created_at >= ?", domain.ParticipationStatusActive, cutoff).
+		Group("to_char(created_at, 'YYYY-MM')").
+		Order("month").
+		Scan(&result).Error
+	return result, err
+}

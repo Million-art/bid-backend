@@ -199,8 +199,29 @@ func (p *ChannelPoster) SendContactThanks(ctx context.Context, chatID int64) err
 	)
 }
 
+// NotifyUser DMs a participant with an optional Mini App open button.
+func (p *ChannelPoster) NotifyUser(ctx context.Context, chatID int64, text, buttonLabel string) error {
+	if p == nil || chatID == 0 || !p.BroadcastConfigured() {
+		return nil
+	}
+	label := strings.TrimSpace(buttonLabel)
+	if label == "" {
+		label = "Open CarraMarket"
+	}
+	if err := p.sendPrivateWithMiniAppButton(ctx, chatID, truncateRunes(text, 3500), label); err != nil {
+		p.log.Warn("telegram_user_notify_failed", "chat_id", chatID, "error", err)
+		return err
+	}
+	return nil
+}
+
+// NotifyAdmin DMs the configured Telegram admin chat (ADMIN_ID) with an ops alert.
+func (p *ChannelPoster) NotifyAdmin(ctx context.Context, text string) {
+	p.notifyAdmin(ctx, text)
+}
+
 func (p *ChannelPoster) notifyAdmin(ctx context.Context, text string) {
-	if p.adminID == "" {
+	if p == nil || p.adminID == "" || strings.TrimSpace(p.token) == "" {
 		return
 	}
 	if err := p.apiCall(ctx, "sendMessage", map[string]any{

@@ -2,15 +2,18 @@ package chapapayment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/bid-hub/admin-backend/core/ports"
 	"github.com/bid-hub/admin-backend/core/services/lub"
+	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 )
 
@@ -34,6 +37,9 @@ type Service struct {
 	lubSvc          *lub.Service
 	users           ports.ParticipantUserRepository
 	notificationSvc ports.NotificationService
+	chapa           ports.PaymentProvider
+	metrics         ports.MetricsProvider
+	admin           ports.AdminNotifier
 	log             *slog.Logger
 	pendingBids     sync.Map // map[string][]domain.Money keyed by txRef
 	placedTxBids    sync.Map // map[string]bool keyed by txRef for idempotency
@@ -50,6 +56,38 @@ func NewService(
 		log = slog.Default()
 	}
 	return &Service{repo: repo, lubSvc: lubSvc, users: users, notificationSvc: notificationSvc, log: log}
+}
+
+func (s *Service) SetMetrics(m ports.MetricsProvider) {
+	s.metrics = m
+}
+
+func (s *Service) SetAdminNotifier(n ports.AdminNotifier) {
+	s.admin = n
+}
+
+func (s *Service) SetChapaClient(c ports.PaymentProvider) {
+	s.chapa = c
+}
+
+func (s *Service) alertAdmin(ctx context.Context, text string) {
+	if s.admin == nil {
+		return
+	}
+	s.admin.NotifyAdmin(ctx, text)
+}
+
+func (s *Service) capturePaymentIssue(txRef, kind string, err error) {
+	sentry.WithScope(func(scope *sentry.Scope) {
+		scope.SetTag("payment.tx_ref", txRef)
+		scope.SetTag("payment.issue", kind)
+		scope.SetLevel(sentry.LevelError)
+		if err != nil {
+			sentry.CaptureException(err)
+			return
+		}
+		sentry.CaptureMessage(kind + ": " + txRef)
+	})
 }
 
 func (s *Service) SetPendingBid(txRef string, bidValue domain.Money) {
@@ -75,6 +113,58 @@ func (s *Service) SetPendingBids(txRef string, bidValues []domain.Money) {
 	s.pendingBids.Store(txRef, cleaned)
 }
 
+func encodeBidValues(bidValues []domain.Money) string {
+	parts := make([]string, 0, len(bidValues))
+	for _, v := range bidValues {
+		if v.IsPositive() {
+			parts = append(parts, v.String())
+		}
+	}
+	return strings.Join(parts, "_")
+}
+
+func decodeBidValues(raw string) []domain.Money {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '_' || r == ';' || r == '|'
+	})
+	out := make([]domain.Money, 0, len(parts))
+	for _, part := range parts {
+		if m, err := domain.NewMoneyFromString(strings.TrimSpace(part)); err == nil && m.IsPositive() {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// NormalizeChapaMeta accepts the various shapes Chapa returns for custom meta
+// (object, string-keyed map, or JSON string).
+func NormalizeChapaMeta(raw interface{}) map[string]interface{} {
+	switch m := raw.(type) {
+	case map[string]interface{}:
+		return m
+	case map[string]string:
+		out := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			out[k] = v
+		}
+		return out
+	case string:
+		s := strings.TrimSpace(m)
+		if s == "" {
+			return nil
+		}
+		var out map[string]interface{}
+		if err := json.Unmarshal([]byte(s), &out); err == nil {
+			return out
+		}
+	}
+	return nil
+}
+
 func parseMoneyFromMeta(raw interface{}) (domain.Money, bool) {
 	switch v := raw.(type) {
 	case string:
@@ -93,7 +183,7 @@ func parseMoneyFromMeta(raw interface{}) (domain.Money, bool) {
 	return domain.Zero(), false
 }
 
-func (s *Service) resolveBidValues(txRef string, snap *VerifiedSnapshot) []domain.Money {
+func (s *Service) resolveBidValues(ctx context.Context, txRef string, snap *VerifiedSnapshot) []domain.Money {
 	if snap != nil && len(snap.BidValues) > 0 {
 		out := make([]domain.Money, 0, len(snap.BidValues))
 		for _, v := range snap.BidValues {
@@ -133,16 +223,7 @@ func (s *Service) resolveBidValues(txRef string, snap *VerifiedSnapshot) []domai
 			}
 		}
 		if rawCSV, ok := snap.Meta["bid_values"].(string); ok && strings.TrimSpace(rawCSV) != "" {
-			parts := strings.FieldsFunc(rawCSV, func(r rune) bool {
-				return r == ',' || r == '_' || r == ';' || r == '|'
-			})
-			out := make([]domain.Money, 0, len(parts))
-			for _, part := range parts {
-				if m, err := domain.NewMoneyFromString(strings.TrimSpace(part)); err == nil && m.IsPositive() {
-					out = append(out, m)
-				}
-			}
-			if len(out) > 0 {
+			if out := decodeBidValues(rawCSV); len(out) > 0 {
 				return out
 			}
 		}
@@ -168,6 +249,12 @@ func (s *Service) resolveBidValues(txRef string, snap *VerifiedSnapshot) []domai
 			}
 		}
 	}
+	// Durable fallback: bid pack saved on the payments row at checkout.
+	if p, err := s.repo.GetByTxRef(ctx, txRef); err == nil && p != nil {
+		if out := decodeBidValues(p.BidValues); len(out) > 0 {
+			return out
+		}
+	}
 	return nil
 }
 
@@ -175,8 +262,9 @@ func (s *Service) placePendingBidsIfNeeded(ctx context.Context, txRef string, au
 	if _, alreadyPlaced := s.placedTxBids.Load(txRef); alreadyPlaced {
 		return
 	}
-	bids := s.resolveBidValues(txRef, snap)
+	bids := s.resolveBidValues(ctx, txRef, snap)
 	if len(bids) == 0 {
+		s.log.Warn("chapa_no_bid_values_to_place", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", participantID)
 		return
 	}
 	placed := 0
@@ -232,10 +320,16 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 			return fmt.Errorf("payment ledger upsert (meta invalid): %w", err)
 		}
 		s.log.Warn("chapa_payment_meta_invalid", "tx_ref", txRef, "error", parseErr)
+		if s.metrics != nil {
+			s.metrics.RecordPaymentFailure()
+		}
+		s.capturePaymentIssue(txRef, "chapa_meta_invalid", parseErr)
+		s.notifyBuyerAndAdminFailure(ctx, txRef, "", uuid.Nil, "invalid payment meta: "+domain.FormatErrorDetail(parseErr))
 		return nil
 	}
 
 	if !chapaOK {
+		reason := fmt.Sprintf("chapa verify status not success (api=%q data=%q)", snap.APIStatus, snap.DataStatus)
 		p := &domain.Payment{
 			TxRef:     txRef,
 			UserID:    ptrUUID(userID),
@@ -243,12 +337,17 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 			Amount:    pricePaid,
 			Status:    domain.PaymentStatusFailed,
 			Processed: true,
-			LastError: fmt.Sprintf("chapa verify status not success (api=%q data=%q)", snap.APIStatus, snap.DataStatus),
+			LastError: reason,
 		}
 		if err := s.repo.Upsert(ctx, p); err != nil {
 			return fmt.Errorf("payment ledger upsert (chapa not success): %w", err)
 		}
 		s.log.Warn("chapa_payment_not_success", "tx_ref", txRef, "api_status", snap.APIStatus, "data_status", snap.DataStatus)
+		if s.metrics != nil {
+			s.metrics.RecordPaymentFailure()
+		}
+		s.capturePaymentIssue(txRef, "chapa_not_success", nil)
+		s.notifyBuyerAndAdminFailure(ctx, txRef, userID.String(), auctionID, reason)
 		return nil
 	}
 
@@ -264,6 +363,9 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 	}
 	if err := s.repo.Upsert(ctx, p); err != nil {
 		return fmt.Errorf("payment ledger upsert: %w", err)
+	}
+	if s.metrics != nil {
+		s.metrics.RecordPaymentSuccess(pricePaid.Float64())
 	}
 
 	if existingPart, err := s.lubSvc.GetParticipation(auctionID, userID.String()); err == nil && existingPart != nil && existingPart.Status == domain.ParticipationStatusActive {
@@ -288,9 +390,17 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 		_ = s.repo.SetFulfillmentFailure(ctx, txRef, err)
 		if domain.IsRetryableFulfillmentError(err) {
 			s.log.Error("chapa_participation_record_failed", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", userID.String(), "error", err)
+			s.capturePaymentIssue(txRef, "fulfillment_deferred", err)
+			s.alertAdmin(ctx, fmt.Sprintf(
+				"⏳ Payment success but fulfillment deferred\ntx_ref: %s\nauction: %s\nuser: %s\nerror: %s",
+				txRef, auctionID.String(), userID.String(), domain.FormatErrorDetail(err),
+			))
 			return ErrFulfillmentDeferred
 		} else {
 			s.log.Warn("chapa_participation_record_failed_no_retry", "tx_ref", txRef, "auction_id", auctionID.String(), "user_id", userID.String(), "error", err)
+			s.capturePaymentIssue(txRef, "fulfillment_failed", err)
+			s.notifyBuyerAndAdminFailure(ctx, txRef, userID.String(), auctionID,
+				"payment captured but ticket fulfillment failed: "+domain.FormatErrorDetail(err))
 			if mErr := s.repo.MarkProcessed(ctx, txRef); mErr != nil {
 				s.log.Error("chapa_mark_processed_failed_after_non_retryable", "tx_ref", txRef, "error", mErr)
 			}
@@ -304,7 +414,10 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 	}
 
 	s.placePendingBidsIfNeeded(ctx, txRef, auctionID, userID.String(), snap)
-	s.notifyParticipationConfirmed(ctx, txRef, userID.String(), auctionID, pricePaid)
+	s.notifyBuyerAndAdminSuccess(ctx, txRef, userID.String(), auctionID, pricePaid)
+	if s.metrics != nil {
+		s.metrics.RecordParticipation(pricePaid.Float64())
+	}
 
 	if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 		s.log.Error("chapa_mark_processed_failed", "tx_ref", txRef, "error", err)
@@ -314,17 +427,40 @@ func (s *Service) ProcessVerified(ctx context.Context, snap *VerifiedSnapshot) e
 	return nil
 }
 
-func (s *Service) notifyParticipationConfirmed(ctx context.Context, txRef, participantID string, auctionID uuid.UUID, feePaid domain.Money) {
-	if s.notificationSvc == nil {
-		return
-	}
-	auctionTitle := ""
+func (s *Service) auctionTitle(auctionID uuid.UUID) string {
 	if a, aErr := s.lubSvc.GetAuctionByID(auctionID); aErr == nil && a != nil {
-		auctionTitle = a.Title
+		return a.Title
 	}
-	if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, participantID, auctionID, auctionTitle, feePaid); err != nil {
-		s.log.Error("failed to send participation notification", "tx_ref", txRef, "user_id", participantID, "error", err)
+	return ""
+}
+
+func (s *Service) notifyBuyerAndAdminSuccess(ctx context.Context, txRef, participantID string, auctionID uuid.UUID, feePaid domain.Money) {
+	title := s.auctionTitle(auctionID)
+	if s.notificationSvc != nil {
+		if err := s.notificationSvc.NotifyParticipationConfirmed(ctx, participantID, auctionID, title, feePaid, txRef); err != nil {
+			s.log.Error("failed to send participation notification", "tx_ref", txRef, "user_id", participantID, "error", err)
+		}
 	}
+	s.alertAdmin(ctx, fmt.Sprintf(
+		"✅ Payment success\ntx_ref: %s\namount: %s ETB\nauction: %s (%s)\nuser: %s",
+		txRef, feePaid.String(), title, auctionID.String(), participantID,
+	))
+}
+
+func (s *Service) notifyBuyerAndAdminFailure(ctx context.Context, txRef, participantID string, auctionID uuid.UUID, reason string) {
+	if participantID != "" && auctionID != uuid.Nil && s.notificationSvc != nil {
+		if err := s.notificationSvc.NotifyPaymentFailed(ctx, participantID, auctionID, txRef, reason); err != nil {
+			s.log.Error("failed to send payment-failed notification", "tx_ref", txRef, "user_id", participantID, "error", err)
+		}
+	}
+	title := ""
+	if auctionID != uuid.Nil {
+		title = s.auctionTitle(auctionID)
+	}
+	s.alertAdmin(ctx, fmt.Sprintf(
+		"❌ Payment failed\ntx_ref: %s\nauction: %s (%s)\nuser: %s\nreason: %s",
+		txRef, title, auctionID.String(), participantID, reason,
+	))
 }
 
 func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool {
@@ -359,7 +495,7 @@ func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool
 		}
 	}
 	s.placePendingBidsIfNeeded(ctx, txRef, *p.AuctionID, p.UserID.String(), nil)
-	s.notifyParticipationConfirmed(ctx, txRef, p.UserID.String(), *p.AuctionID, p.Amount)
+	s.notifyBuyerAndAdminSuccess(ctx, txRef, p.UserID.String(), *p.AuctionID, p.Amount)
 	if err := s.repo.MarkProcessed(ctx, txRef); err != nil {
 		s.log.Error("chapa_retry_mark_processed_failed", "tx_ref", txRef, "error", err)
 		return false
@@ -370,6 +506,24 @@ func (s *Service) tryFulfillPayment(ctx context.Context, p *domain.Payment) bool
 
 func (s *Service) GetPaymentByTxRef(ctx context.Context, txRef string) (*domain.Payment, error) {
 	return s.repo.GetByTxRef(ctx, strings.TrimSpace(txRef))
+}
+
+// EnsureBidsForPayment places any missing bid pack for an already-successful payment
+// (e.g. return-URL verify after webhook fulfilled participation without in-memory bids).
+func (s *Service) EnsureBidsForPayment(ctx context.Context, txRef string, bidValues []domain.Money) {
+	txRef = strings.TrimSpace(txRef)
+	if txRef == "" {
+		return
+	}
+	if len(bidValues) > 0 {
+		s.SetPendingBids(txRef, bidValues)
+	}
+	p, err := s.repo.GetByTxRef(ctx, txRef)
+	if err != nil || p == nil || p.UserID == nil || p.AuctionID == nil {
+		return
+	}
+	snap := &VerifiedSnapshot{TxRef: txRef, BidValues: bidValues}
+	s.placePendingBidsIfNeeded(ctx, txRef, *p.AuctionID, p.UserID.String(), snap)
 }
 
 func (s *Service) RetryPaymentByTxRef(ctx context.Context, txRef string) (fulfilled bool, err error) {
@@ -390,19 +544,23 @@ func (s *Service) RetryPaymentByTxRef(ctx context.Context, txRef string) (fulfil
 	return s.tryFulfillPayment(ctx, p), nil
 }
 
-func (s *Service) CreatePendingPayment(ctx context.Context, txRef string, userID, auctionID uuid.UUID, amount domain.Money) error {
+func (s *Service) CreatePendingPayment(ctx context.Context, txRef string, userID, auctionID uuid.UUID, amount domain.Money, bidValues ...domain.Money) error {
 	p := &domain.Payment{
 		TxRef:     txRef,
 		UserID:    ptrUUID(userID),
 		AuctionID: ptrUUID(auctionID),
 		Amount:    amount,
+		BidValues: encodeBidValues(bidValues),
 		Status:    domain.PaymentStatusPending,
 		Processed: false,
 	}
 	if err := s.repo.Upsert(ctx, p); err != nil {
 		return fmt.Errorf("chapa: create pending payment: %w", err)
 	}
-	s.log.Info("chapa_pending_payment_created", "tx_ref", txRef, "user_id", userID, "auction_id", auctionID)
+	if len(bidValues) > 0 {
+		s.SetPendingBids(txRef, bidValues)
+	}
+	s.log.Info("chapa_pending_payment_created", "tx_ref", txRef, "user_id", userID, "auction_id", auctionID, "bid_values", p.BidValues)
 	return nil
 }
 
@@ -420,8 +578,77 @@ func (s *Service) RetryUnprocessedPayments(ctx context.Context, limit int) (int,
 	return done, nil
 }
 
+// ReconcilePendingPayments verifies stale pending checkouts with Chapa and fulfills
+// ones that succeeded when the webhook/return URL never reached us (common in Mini App).
+func (s *Service) ReconcilePendingPayments(ctx context.Context, olderThan time.Duration, limit int) (int, error) {
+	if s.chapa == nil {
+		return 0, nil
+	}
+	if olderThan <= 0 {
+		olderThan = 2 * time.Minute
+	}
+	rows, err := s.repo.ListPendingOlderThan(ctx, time.Now().Add(-olderThan), limit)
+	if err != nil {
+		return 0, err
+	}
+	done := 0
+	for i := range rows {
+		txRef := rows[i].TxRef
+		snap, vErr := s.chapa.VerifyTransaction(txRef)
+		if vErr != nil {
+			s.log.Warn("chapa_reconcile_verify_failed", "tx_ref", txRef, "error", vErr)
+			continue
+		}
+		status := strings.TrimSpace(snap.Status)
+		if strings.EqualFold(status, "pending") || strings.EqualFold(status, "created") {
+			continue
+		}
+		verified := &VerifiedSnapshot{
+			TxRef:          txRef,
+			ChapaReference: snap.Reference,
+			APIStatus:      "success",
+			DataStatus:     status,
+			Amount:         snap.Amount,
+			Meta:           NormalizeChapaMeta(snap.Meta),
+			CustomerEmail:  snap.CustomerEmail,
+			CustomerFirst:  snap.CustomerFirst,
+			BidValues:      decodeBidValues(rows[i].BidValues),
+		}
+		if err := s.ProcessVerified(ctx, verified); err != nil {
+			if errors.Is(err, ErrFulfillmentDeferred) {
+				s.log.Info("chapa_reconcile_deferred", "tx_ref", txRef)
+				continue
+			}
+			s.log.Warn("chapa_reconcile_process_failed", "tx_ref", txRef, "error", err)
+			continue
+		}
+		done++
+		s.log.Info("chapa_reconcile_fulfilled", "tx_ref", txRef, "chapa_status", status)
+	}
+	return done, nil
+}
+
 func (s *Service) ListSuccessUnprocessed(ctx context.Context, limit int) ([]domain.Payment, error) {
 	return s.repo.ListSuccessUnprocessed(ctx, limit)
+}
+
+func metaString(meta map[string]interface{}, keys ...string) string {
+	if meta == nil {
+		return ""
+	}
+	for _, k := range keys {
+		switch v := meta[k].(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		case fmt.Stringer:
+			if s := strings.TrimSpace(v.String()); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 func parseParticipationMeta(snap *VerifiedSnapshot) (auctionID, userID uuid.UUID, price domain.Money, err error) {
@@ -429,11 +656,8 @@ func parseParticipationMeta(snap *VerifiedSnapshot) (auctionID, userID uuid.UUID
 	if meta == nil {
 		return uuid.Nil, uuid.Nil, domain.Zero(), fmt.Errorf("chapa webhook missing meta: %w", domain.ErrInvalidInput)
 	}
-	as, _ := meta["auction_id"].(string)
-	if as == "" {
-		as, _ = meta["product_id"].(string)
-	}
-	us, _ := meta["user_id"].(string)
+	as := metaString(meta, "auction_id", "product_id", "auctionId", "productId")
+	us := metaString(meta, "user_id", "userId", "participant_id", "participantId")
 	auctionID, _ = uuid.Parse(strings.TrimSpace(as))
 	userID, _ = uuid.Parse(strings.TrimSpace(us))
 	if auctionID == uuid.Nil || userID == uuid.Nil {

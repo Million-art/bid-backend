@@ -13,9 +13,12 @@ import (
 
 	handler "github.com/bid-hub/admin-backend/adapters/handler/http"
 	"github.com/bid-hub/admin-backend/adapters/handler/response"
+	"github.com/bid-hub/admin-backend/adapters/payment"
 	"github.com/bid-hub/admin-backend/adapters/repository/postgres"
+	telegramadapter "github.com/bid-hub/admin-backend/adapters/telegram"
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/bid-hub/admin-backend/core/services"
+	"github.com/bid-hub/admin-backend/core/services/chapapayment"
 	"github.com/bid-hub/admin-backend/core/services/lub"
 	"github.com/bid-hub/admin-backend/core/services/notifications"
 	"github.com/bid-hub/admin-backend/platform/cache"
@@ -311,7 +314,7 @@ func main() {
 		})
 	})
 
-	// Periodic automation: Process due LUB products (auto-close and execute draw)
+	// Periodic automation: auto-close due auctions + fulfill stuck Chapa payments.
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
@@ -326,6 +329,11 @@ func main() {
 						sentry.CaptureException(err)
 					})
 				}
+			}
+			if n, err := retryUnprocessedPayments(ctx, db, cfg); err != nil {
+				slog.Warn("retryUnprocessedPayments failed", "error", err)
+			} else if n > 0 {
+				slog.Info("retryUnprocessedPayments fulfilled", "count", n)
 			}
 			cancel()
 		}
@@ -377,6 +385,40 @@ func processDueProducts(ctx context.Context, db *gorm.DB) error {
 	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, partRepo, nil, nil, nil)
 	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, notifSvc, nil)
 	return lubSvc.ProcessDueAuctions(ctx)
+}
+
+func retryUnprocessedPayments(ctx context.Context, db *gorm.DB, cfg *env.Config) (int, error) {
+	if cfg == nil || strings.TrimSpace(cfg.ChapaSecretKey) == "" {
+		return 0, nil
+	}
+	auctionRepo := postgres.NewAuctionRepository(db)
+	partRepo := postgres.NewAuctionParticipationRepository(db)
+	bidRepo := postgres.NewBidRepository(db)
+	auditRepo := postgres.NewAuditLogRepository(db)
+	auditSvc := services.NewAuditLogService(auditRepo)
+	notificationRepo := postgres.NewNotificationRepository(db)
+	userRepo := postgres.NewUserRepository(db)
+	participantUserRepo := postgres.NewParticipantUserRepository(db)
+	notifSvc := notifications.NewService(notificationRepo, userRepo, participantUserRepo, partRepo, nil, nil, nil)
+	tgPoster := telegramadapter.NewChannelPoster(cfg, slog.Default())
+	notifSvc.SetTelegramMessenger(tgPoster)
+	lubSvc := lub.NewService(auctionRepo, partRepo, bidRepo, auditSvc, notifSvc, tgPoster)
+	paymentLedgerRepo := postgres.NewPaymentLedgerRepository(db)
+	chapaSvc := chapapayment.NewService(paymentLedgerRepo, lubSvc, participantUserRepo, notifSvc, slog.Default())
+
+	baseURL := cfg.ChapaBaseURL
+	if strings.TrimSpace(cfg.ChapaAPIURL) != "" {
+		baseURL = strings.TrimSpace(cfg.ChapaAPIURL)
+	}
+	chapaSvc.SetChapaClient(payment.NewChapaClient(cfg.ChapaSecretKey, baseURL))
+	chapaSvc.SetAdminNotifier(tgPoster)
+
+	fulfilled, err := chapaSvc.RetryUnprocessedPayments(ctx, 50)
+	if err != nil {
+		return fulfilled, err
+	}
+	reconciled, err := chapaSvc.ReconcilePendingPayments(ctx, 2*time.Minute, 50)
+	return fulfilled + reconciled, err
 }
 
 // isProductionEnvironment checks if the environment is production

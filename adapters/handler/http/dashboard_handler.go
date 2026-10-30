@@ -48,9 +48,24 @@ func (h *DashboardHandler) GetCharts(c fiber.Ctx) error {
 	if err != nil {
 		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch user growth chart", err)
 	}
+	partChart, err := h.svc.GetParticipationsChart()
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch participations chart", err)
+	}
+	bidsChart, err := h.svc.GetBidsChart()
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch bids chart", err)
+	}
+	payChart, err := h.svc.GetPaymentsChart()
+	if err != nil {
+		return response.Error(c, fiber.StatusInternalServerError, "Failed to fetch payments chart", err)
+	}
 	return response.Success(c, fiber.StatusOK, "Dashboard charts retrieved", fiber.Map{
-		"revenue":    revChart,
-		"userGrowth": userChart,
+		"revenue":        revChart,
+		"userGrowth":     userChart,
+		"participations": partChart,
+		"bids":           bidsChart,
+		"payments":       payChart,
 	})
 }
 

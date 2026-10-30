@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/bid-hub/admin-backend/core/domain"
 	"github.com/bid-hub/admin-backend/core/ports"
@@ -23,6 +24,7 @@ type Service struct {
 	cacheRepo           ports.CacheRepository
 	emailSvc            ports.EmailService
 	smsSvc              ports.SmsService
+	telegram            ports.TelegramUserMessenger
 	log                 *slog.Logger
 }
 
@@ -45,6 +47,11 @@ func NewService(
 		smsSvc:              smsSvc,
 		log:                 slog.Default(),
 	}
+}
+
+// SetTelegramMessenger enables bot DMs for users who have telegram_id (e.g. Mini App).
+func (s *Service) SetTelegramMessenger(m ports.TelegramUserMessenger) {
+	s.telegram = m
 }
 
 // GetUserNotifications retrieves paginated notifications for a user
@@ -145,6 +152,71 @@ func (s *Service) notifyParticipant(
 		Priority:    priority,
 	}
 	return s.createAndInvalidate(ctx, n)
+}
+
+// resolveParticipantPhone looks up a phone for SMS from users, then participant_users.
+func (s *Service) resolveParticipantPhone(participantID string) string {
+	uid, err := uuid.Parse(participantID)
+	if err != nil {
+		return ""
+	}
+	if s.userRepo != nil {
+		if u, uErr := s.userRepo.GetByID(uid); uErr == nil && u != nil {
+			if phone := strings.TrimSpace(u.Phone); phone != "" {
+				return phone
+			}
+		}
+	}
+	if s.participantUserRepo != nil {
+		if pu, pErr := s.participantUserRepo.GetByID(participantID); pErr == nil && pu != nil {
+			return strings.TrimSpace(pu.Phone)
+		}
+	}
+	return ""
+}
+
+func (s *Service) sendParticipantSMS(participantID, message string) {
+	if s.smsSvc == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	phone := s.resolveParticipantPhone(participantID)
+	if phone == "" {
+		s.log.Info("sms_skipped_no_phone", "participant_id", participantID)
+		return
+	}
+	if err := s.smsSvc.SendSms(phone, message); err != nil {
+		s.log.Warn("sms_send_failed", "participant_id", participantID, "phone", phone, "error", err)
+		return
+	}
+	s.log.Info("sms_sent", "participant_id", participantID, "phone", phone)
+}
+
+func (s *Service) resolveParticipantTelegramID(participantID string) int64 {
+	uid, err := uuid.Parse(participantID)
+	if err != nil || s.userRepo == nil {
+		return 0
+	}
+	u, uErr := s.userRepo.GetByID(uid)
+	if uErr != nil || u == nil || u.TelegramID == nil || *u.TelegramID == 0 {
+		return 0
+	}
+	return *u.TelegramID
+}
+
+func (s *Service) sendParticipantTelegram(ctx context.Context, participantID, message, buttonLabel string) {
+	if s.telegram == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	chatID := s.resolveParticipantTelegramID(participantID)
+	if chatID == 0 {
+		s.log.Info("telegram_dm_skipped_no_telegram_id", "participant_id", participantID)
+		return
+	}
+	if err := s.telegram.NotifyUser(ctx, chatID, message, buttonLabel); err != nil {
+		s.log.Warn("telegram_dm_failed", "participant_id", participantID, "chat_id", chatID, "error", err)
+		return
+	}
+	s.log.Info("telegram_dm_sent", "participant_id", participantID, "chat_id", chatID)
 }
 
 func (s *Service) notifyAuctionParticipants(
@@ -278,9 +350,17 @@ func (s *Service) NotifyAuctionCancelled(ctx context.Context, productID uuid.UUI
 	return s.notifyAuctionParticipants(ctx, productID, domain.NotificationTypeAuctionCancelled, title, message, priority)
 }
 
-func (s *Service) NotifyParticipationConfirmed(ctx context.Context, participantID string, productID uuid.UUID, productName string, feePaid domain.Money) error {
-	title, message, priority := participationNotificationCopy(displayName(productName), feePaid)
-	return s.notifyParticipant(ctx, participantID, productID, domain.NotificationTypeParticipationConfirmed, title, message, priority)
+func (s *Service) NotifyParticipationConfirmed(ctx context.Context, participantID string, productID uuid.UUID, productName string, feePaid domain.Money, txRef string) error {
+	name := displayName(productName)
+	title, message, priority := participationNotificationCopy(name, feePaid)
+	if err := s.notifyParticipant(ctx, participantID, productID, domain.NotificationTypeParticipationConfirmed, title, message, priority); err != nil {
+		return err
+	}
+	sms := participationSMSCopy(name, feePaid, txRef)
+	s.sendParticipantSMS(participantID, sms)
+	// Bot DM covers Mini App users who paid before sharing a phone (no SMS yet).
+	s.sendParticipantTelegram(ctx, participantID, participationTelegramCopy(name, feePaid, txRef), "Open auction")
+	return nil
 }
 
 func (s *Service) NotifyBidPlaced(ctx context.Context, participantID string, productID uuid.UUID, productName string, bidValue domain.Money) error {
@@ -294,8 +374,13 @@ func (s *Service) NotifyBidUpdated(ctx context.Context, participantID string, pr
 }
 
 func (s *Service) NotifyAuctionWinner(ctx context.Context, winnerID string, productID uuid.UUID, productName string, winningBid domain.Money) error {
-	title, message, priority := winnerCopy(displayName(productName), winningBid)
-	return s.notifyParticipant(ctx, winnerID, productID, domain.NotificationTypeAuctionWinner, title, message, priority)
+	name := displayName(productName)
+	title, message, priority := winnerCopy(name, winningBid)
+	if err := s.notifyParticipant(ctx, winnerID, productID, domain.NotificationTypeAuctionWinner, title, message, priority); err != nil {
+		return err
+	}
+	s.sendParticipantTelegram(ctx, winnerID, fmt.Sprintf("🏆 You won!\n\n'%s' with lowest unique bid %s ETB.", name, winningBid.String()), "View auction")
+	return nil
 }
 
 func (s *Service) NotifyAuctionNoWinner(ctx context.Context, productID uuid.UUID, productName string) error {
@@ -342,7 +427,13 @@ func (s *Service) NotifyPaymentFailed(ctx context.Context, participantID string,
 		AuctionID: &aid,
 		Priority:  priority,
 	}
-	return s.createAndInvalidate(ctx, n)
+	if err := s.createAndInvalidate(ctx, n); err != nil {
+		return err
+	}
+	failSMS := paymentFailedSMSCopy(txRef, reason)
+	s.sendParticipantSMS(participantID, failSMS)
+	s.sendParticipantTelegram(ctx, participantID, failSMS, "Open CarraMarket")
+	return nil
 }
 
 func (s *Service) NotifyRefundProcessed(ctx context.Context, participantID string, productID uuid.UUID, amount domain.Money, txRef string) error {
