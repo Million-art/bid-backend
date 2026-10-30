@@ -28,27 +28,34 @@ func TestNewChannelPosterEnabled(t *testing.T) {
 func TestBuildCaptionIncludesFeeAndLinkCopy(t *testing.T) {
 	closeAt := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	a := &domain.Auction{
-		ID:          uuid.New(),
-		Title:       "iPhone 16",
-		Description: "Brand new sealed unit",
-		EntranceFee: domain.NewMoney(80),
-		RetailValue: domain.NewMoney(45000),
-		CloseAt:     &closeAt,
+		ID:              uuid.New(),
+		Title:           "iPhone 16",
+		Description:     "Brand new sealed unit",
+		EntranceFee:     domain.NewMoney(80),
+		RetailValue:     domain.NewMoney(45000),
+		MinParticipants: 10,
+		CloseAt:         &closeAt,
 	}
 	cap := buildCaption(a)
 	for _, want := range []string{
+		"NEW AUCTION LIVE",
 		"iPhone 16",
 		"Brand new sealed unit",
 		"80 ETB",
 		"45000 ETB",
-		"Join",
+		"How it works",
+		"Open the auction",
 	} {
-		if !strings.Contains(cap, want) && want != "Join" {
+		if !strings.Contains(cap, want) {
 			t.Fatalf("caption missing %q: %s", want, cap)
 		}
 	}
-	if !strings.Contains(cap, "Tap below") {
-		t.Fatalf("expected CTA copy in caption: %s", cap)
+	if !strings.Contains(cap, "shot at") && !strings.Contains(cap, "Worth") {
+		t.Fatalf("expected dynamic value hook in caption: %s", cap)
+	}
+	btn := auctionCTAButton(a)
+	if !strings.Contains(btn, "Enter") && !strings.Contains(btn, "bid") && !strings.Contains(btn, "Bid") {
+		t.Fatalf("unexpected CTA button: %s", btn)
 	}
 }
 

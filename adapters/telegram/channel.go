@@ -87,7 +87,7 @@ func (p *ChannelPoster) PostAuctionPublished(ctx context.Context, a *domain.Auct
 	caption := buildCaption(a)
 	keyboard := map[string]any{
 		"inline_keyboard": [][]map[string]string{
-			{{"text": "Join & bid", "url": deepLink}},
+			{{"text": auctionCTAButton(a), "url": deepLink}},
 		},
 	}
 
@@ -247,31 +247,122 @@ func (p *ChannelPoster) apiCall(ctx context.Context, method string, payload map[
 	return nil
 }
 
+func auctionCTAButton(a *domain.Auction) string {
+	if a != nil && a.CloseAt != nil {
+		until := time.Until(a.CloseAt.UTC())
+		if until > 0 && until <= 24*time.Hour {
+			return "⚡ Bid before it ends"
+		}
+	}
+	if a != nil && a.RetailValue.IsPositive() && a.EntranceFee.IsPositive() &&
+		a.RetailValue.IntPart() >= a.EntranceFee.IntPart()*20 {
+		return "🎯 Enter & win it"
+	}
+	return "🔥 Join & bid now"
+}
+
+func pickAuctionHook(a *domain.Auction) string {
+	if a == nil {
+		return "Lowest unique bid wins — be the only one with the lowest number."
+	}
+
+	fee := a.EntranceFee
+	retail := a.RetailValue
+	if retail.IsPositive() && fee.IsPositive() && retail.IntPart() > fee.IntPart() {
+		mult := retail.IntPart() / fee.IntPart()
+		if mult >= 100 {
+			return fmt.Sprintf(
+				"Pay only <b>%s</b> for a shot at <b>%s</b> — that's ~%dx the entry.",
+				html.EscapeString(formatETB(fee)),
+				html.EscapeString(formatETB(retail)),
+				mult,
+			)
+		}
+		if mult >= 10 {
+			return fmt.Sprintf(
+				"Worth <b>%s</b>. Entry just <b>%s</b>. Lowest unique bid takes it.",
+				html.EscapeString(formatETB(retail)),
+				html.EscapeString(formatETB(fee)),
+			)
+		}
+	}
+
+	if a.CloseAt != nil {
+		until := time.Until(a.CloseAt.UTC())
+		if until > 0 && until <= time.Hour {
+			mins := int(until.Minutes())
+			if mins < 1 {
+				mins = 1
+			}
+			return fmt.Sprintf("⏱ Closing in ~<b>%d min</b> — last chance to place your unique bid.", mins)
+		}
+		if until > 0 && until <= 24*time.Hour {
+			hours := int(until.Hours())
+			if hours < 1 {
+				hours = 1
+			}
+			return fmt.Sprintf("⏱ Ends in ~<b>%d h</b>. Lowest unique number wins the prize.", hours)
+		}
+	}
+
+	if a.MinParticipants > 0 {
+		return fmt.Sprintf(
+			"Need <b>%d</b> entrants to unlock the prize. Lowest unique bid wins.",
+			a.MinParticipants,
+		)
+	}
+
+	return "Lowest unique bid wins — pay the entry, pick a number nobody else picks."
+}
+
+func formatCloseAt(t time.Time) string {
+	loc, err := time.LoadLocation("Africa/Addis_Ababa")
+	if err != nil {
+		loc = time.FixedZone("EAT", 3*3600)
+	}
+	return t.In(loc).Format("Mon 02 Jan · 3:04 PM") + " EAT"
+}
+
 func buildCaption(a *domain.Auction) string {
 	var b strings.Builder
+
+	b.WriteString("🆕 <b>NEW AUCTION LIVE</b>\n")
 	b.WriteString("<b>")
-	b.WriteString(html.EscapeString(a.Title))
+	b.WriteString(html.EscapeString(strings.TrimSpace(a.Title)))
 	b.WriteString("</b>\n\n")
+
+	b.WriteString(pickAuctionHook(a))
+	b.WriteString("\n\n")
 
 	desc := strings.TrimSpace(a.Description)
 	if desc != "" {
+		b.WriteString("<i>")
 		b.WriteString(html.EscapeString(truncateRunes(desc, maxDescRunes)))
-		b.WriteString("\n\n")
+		b.WriteString("</i>\n\n")
 	}
 
-	b.WriteString("Entry: <b>")
+	b.WriteString("💵 Entry: <b>")
 	b.WriteString(html.EscapeString(formatETB(a.EntranceFee)))
 	b.WriteString("</b>")
 	if a.RetailValue.IsPositive() {
-		b.WriteString("\nWorth: <b>")
+		b.WriteString("\n🎁 Prize value: <b>")
 		b.WriteString(html.EscapeString(formatETB(a.RetailValue)))
 		b.WriteString("</b>")
 	}
-	if a.CloseAt != nil {
-		b.WriteString("\nCloses: ")
-		b.WriteString(html.EscapeString(a.CloseAt.UTC().Format("02 Jan 2006 15:04 UTC")))
+	if a.MinParticipants > 0 {
+		b.WriteString("\n👥 Unlock at: <b>")
+		b.WriteString(strconv.Itoa(a.MinParticipants))
+		b.WriteString(" entrants</b>")
 	}
-	b.WriteString("\n\nTap below to open and place your bid.")
+	if a.CloseAt != nil {
+		b.WriteString("\n🗓 Closes: <b>")
+		b.WriteString(html.EscapeString(formatCloseAt(*a.CloseAt)))
+		b.WriteString("</b>")
+	}
+
+	b.WriteString("\n\n<b>How it works</b>\n")
+	b.WriteString("1) Pay entry  ·  2) Place your lowest unique bid  ·  3) Win if nobody matches you")
+	b.WriteString("\n\n👇 Open the auction and bid now.")
 
 	return truncateRunes(b.String(), maxCaptionRunes)
 }
