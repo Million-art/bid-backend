@@ -117,6 +117,10 @@ func (m *mockPartRepo) CountByAuctions(auctionIDs []uuid.UUID) (map[uuid.UUID]in
 func (m *mockPartRepo) CountByAuctionsSince(auctionIDs []uuid.UUID, since time.Time) (map[uuid.UUID]int64, error) {
 	return nil, nil
 }
+func (m *mockPartRepo) GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error) {
+	return nil, nil
+}
+
 func (m *mockPartRepo) JoinedAuctionSet(auctionIDs []uuid.UUID, participantID string) (map[uuid.UUID]bool, error) {
 	return nil, nil
 }
@@ -181,6 +185,10 @@ func (m *mockBidRepo) MarkWinner(aid, winner uuid.UUID) error {
 	return nil
 }
 func (m *mockBidRepo) DeleteBid(id uuid.UUID) error { return nil }
+
+func (m *mockBidRepo) GetCountByMonth(lastMonths int) ([]domain.MonthlyCount, error) {
+	return nil, nil
+}
 
 type mockAudit struct{}
 

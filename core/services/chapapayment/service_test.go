@@ -1,6 +1,7 @@
 package chapapayment
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bid-hub/admin-backend/core/domain"
@@ -17,7 +18,7 @@ func TestResolveBidValues_CommaAndUnderscoreSeparatedStringInMeta(t *testing.T) 
 		},
 	}
 
-	got := svc.resolveBidValues("R-test123", snap)
+	got := svc.resolveBidValues(context.Background(), "R-test123", snap)
 	require.Len(t, got, 3)
 	assert.Equal(t, "1.25", got[0].String())
 	assert.Equal(t, "3.50", got[1].String())
@@ -31,7 +32,7 @@ func TestResolveBidValues_PendingBidsFallback(t *testing.T) {
 		domain.NewMoney(5.40),
 	})
 
-	got := svc.resolveBidValues("R-pack456", &VerifiedSnapshot{TxRef: "R-pack456"})
+	got := svc.resolveBidValues(context.Background(), "R-pack456", &VerifiedSnapshot{TxRef: "R-pack456"})
 	require.Len(t, got, 2)
 	assert.Equal(t, "2.10", got[0].String())
 	assert.Equal(t, "5.40", got[1].String())
